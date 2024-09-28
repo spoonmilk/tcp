@@ -26,6 +26,34 @@ START_SHELL = "/bin/bash"
 VHOST_BINARY_NAME = "vhost"
 VROUTER_BINARY_NAME = "vrouter"
 
+# Location of this script
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+CONSTANTS_PATH_DEFAULT = pathlib.Path(SCRIPT_DIR) / "constants.json"
+
+@dataclass
+class NodeConstants():
+    # RIP constants
+    rip_periodic_update_rate_ms: int = 5000    # in milliseconds
+    rip_timeout_threshold_ms: int    = 12000   # in milliseconds
+
+    # RIP constants
+    tcp_rto_min_us: int = 1000    # in microseconds
+    tcp_rto_max_us: int = 5000000 # in microseconds
+
+    def to_json(self):
+        d = {
+            "rip_periodic_update_rate_ms": self.rip_periodic_update_rate_ms,
+            "rip_timeout_threshold_ms": self.rip_timeout_threshold_ms,
+            "tcp_rto_min_us": self.tcp_rto_min_us,
+            "tcp_rto_max_us": self.tcp_rto_max_us,
+        }
+        return d
+
+    @classmethod
+    def from_json(cls, d):
+        return NodeConstants(**d)
+
 
 class PortAllocator():
 
@@ -140,7 +168,7 @@ class Node():
 
         return routers
 
-    def write_config(self, output_file):
+    def write_config(self, c: NodeConstants, output_file):
         with open(output_file, "w") as fd:
             fd.write(f"# Auto-generated configuration for {self.name}\n\n")
 
@@ -182,6 +210,10 @@ class Node():
                     fd.write("# Neighbor routers that should be sent RIP messages\n")
                     for nr in neighbor_router_ips:
                         fd.write(f"rip advertise-to {nr}\n")
+
+                fd.write("\n# Timing parameters for RIP\n")
+                fd.write("rip periodic-update-rate {} # in milliseconds\n".format(c.rip_periodic_update_rate_ms))
+                fd.write("rip route-timeout-threshold {} # in milliseconds\n".format(c.rip_timeout_threshold_ms))
             elif self.node_type == NODE_TYPE_HOST:
                 routers = self.get_neighboring_routers()
                 if len(routers) == 0:
@@ -193,6 +225,10 @@ class Node():
                 fd.write("routing static\n\n")
                 fd.write("# Default route\n")
                 fd.write("route 0.0.0.0/0 via {}\n".format(default_ip))
+
+                fd.write("\n\n# Example timing parameters for TCP\n")
+                fd.write("tcp rto-min {} # in microseconds\n".format(c.tcp_rto_min_us))
+                fd.write("tcp rto-max {} # in microseconds\n".format(c.tcp_rto_max_us))
             else:
                 raise ValueError("Invalid node type")
 
@@ -235,11 +271,11 @@ class NetConfig():
 
                 node.add_iface(assigned_ip, net, udp_addr)
 
-    def write_links(self, output_dir):
+    def write_links(self, constants: NodeConstants, output_dir):
         for node in self.nodes:
             target_file = f"{str(output_dir)}/{node.name}.lnx"
             print(f"Writing {target_file}")
-            node.write_config(target_file)
+            node.write_config(constants, target_file)
 
     def write_device_files(self, output_dir):
         nodes_file = f"{str(output_dir)}/nodes.json"
@@ -280,9 +316,15 @@ class NetConfig():
             links = [_get_node(n) for n in _get(net, "links")]
             advertise_from = [_get_node(n) for n in _get(net, "advertise-routes-from")] \
                 if "advertise-routes-from" in json_data else []
-            network = Network(name=_get(net, "name"),
-                              links=links,
-                              advertise_from=advertise_from)
+            if "prefix" in net:
+                network = Network(name=_get(net, "name"),
+                                  links=links,
+                                  advertise_from=advertise_from,
+                                  alloc=IPAllocator(IPv4Network(_get(net, "prefix"), strict=False)))
+            else:
+                network = Network(name=_get(net, "name"),
+                                  links=links,
+                                  advertise_from=advertise_from)
             networks.append(network)
 
         return NetConfig(nodes=list(nodes.values()), networks=networks)
@@ -302,13 +344,27 @@ def write_json(d, target_file):
 def main(input_args):
     parser = argparse.ArgumentParser()
 
+    parser.add_argument("--constants-file",
+                        type=str,
+                        default=CONSTANTS_PATH_DEFAULT)
     parser.add_argument("net_json_file")
     parser.add_argument("output_dir")
 
     args = parser.parse_args(input_args)
 
+
     input_file = args.net_json_file
     output_path = pathlib.Path(args.output_dir)
+
+    constants_path = pathlib.Path(args.constants_file)
+    constants = NodeConstants()
+    if not constants_path.exists():
+        print(f"Constants file {str(constants_path)} does not exist, creating")
+        write_json(constants.to_json(), constants_path)
+    else:
+        print(f"Using constants file {str(constants_path)}")
+        constants_json = load_json(str(constants_path))
+        constants = NodeConstants.from_json(constants_json)
 
     json_data = load_json(input_file)
     nc = NetConfig.from_json(json_data)
@@ -319,7 +375,7 @@ def main(input_args):
         print(f"Output directory {str(output_path)} does not exist, creating")
         os.mkdir(output_path)
 
-    nc.write_links(output_path)
+    nc.write_links(constants, output_path)
     nc.write_device_files(output_path)
 
 

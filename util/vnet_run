@@ -76,6 +76,7 @@ def do_exit(message):
 class NodeInfo:
     binary_path: str
     extra_args: str = ""
+    sudo: bool = False
 
     @classmethod
     def from_dict(cls, d):
@@ -87,7 +88,7 @@ class NodeInfo:
 # or directly with --bin-config
 class BinManager():
 
-    def __init__(self, device_map: dict[str,NodeInfo]):
+    def __init__(self, device_map: dict[str, NodeInfo]):
         self.device_map = device_map
 
     # Generic per-binary lookup function
@@ -197,7 +198,8 @@ def main(input_args):
     # Ctrl+C and get a shell, rather than killing the pane
     def _cmd(node_name, lnx_file):
         node_bin = bin_info.get_info(node_name)  # Lookup from bin manager
-        cmd = f"{node_bin.binary_path} --config {lnx_file} {node_bin.extra_args} {_extra_args_str}; {START_SHELL}"
+        sudo_str = "sudo " if node_bin.sudo else ""
+        cmd = f"{sudo_str}{node_bin.binary_path} --config {lnx_file} {node_bin.extra_args} {_extra_args_str}; {START_SHELL}"
         return cmd
 
     # Create the session with the first node
