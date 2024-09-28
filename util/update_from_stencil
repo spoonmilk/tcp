@@ -1,4 +1,12 @@
 #!/bin/bash
+#
+# update_from_stencil: Update this repository from the primary stencil
+# repository
+#
+# NOTE: This script will forcibly update all files in this repository
+# with the latest versions in the stencil.  Any local changes are
+# discarded.
+#
 
 set -euo pipefail
 
