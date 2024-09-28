@@ -1,0 +1,27 @@
+#!/bin/bash
+#
+# update_from_stencil: Update this repository from the primary stencil
+# repository
+#
+# NOTE: This script will forcibly update all files in this repository
+# with the latest versions in the stencil.  Any local changes are
+# discarded.
+#
+
+set -euo pipefail
+
+SCRIPT_DIR="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+REPO_DIR=$(realpath "${SCRIPT_DIR}"/..)
+
+STENCIL_REPO=http://github.com/brown-csci1680/ipstack-template
+
+main() {
+    git remote rm stencil || true
+    git remote add stencil "$STENCIL_REPO"
+
+    git config pull.rebase false
+    git pull stencil main --allow-unrelated-histories -s ort -Xtheirs --no-edit
+}
+
+
+main $@

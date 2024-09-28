@@ -1,0 +1,6 @@
+{
+ "rip_periodic_update_rate_ms": 5000,
+ "rip_timeout_threshold_ms": 12000,
+ "tcp_rto_max_us": 5000000,
+ "tcp_rto_min_us": 1000
+}
