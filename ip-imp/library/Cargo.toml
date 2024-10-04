@@ -1,0 +1,9 @@
+[package]
+name = "library"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+etherparse = "0.16"
+ipnetwork = "0.20.0"
+lnxparser = { git = "https://github.com/brown-csci1680/ipstack-utils" }

@@ -1,0 +1,12 @@
+[workspace]
+
+resolver = "2"
+members = [
+    "vhost",
+    "vrouter",
+    "library"
+]
+
+[dependencies]
+prettyprint = "0.8.1"
+rustyline = "14.0.0"
