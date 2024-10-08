@@ -13,6 +13,6 @@ RegisterRecvHandler(protocolNum uint8, callbackFunc HandlerFunc)
 
 */
 
-
+mod prelude;
 mod config;
 mod ip_data_types;
