@@ -14,5 +14,6 @@ RegisterRecvHandler(protocolNum uint8, callbackFunc HandlerFunc)
 */
 
 mod prelude;
-mod config;
-mod ip_data_types;
+mod utils;
+pub mod config;
+pub mod ip_data_types;

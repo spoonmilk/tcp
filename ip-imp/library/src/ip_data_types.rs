@@ -1,13 +1,11 @@
-pub use crate::prelude::*;
+use std::thread;
+use crate::prelude::*;
+use crate::utils::*;
+use std::mem;
 
-#[derive (Debug)]
-pub enum ForwardingOption {
-    Ip(Ipv4Addr),
-    Inter(Interface), // Forwarding to an interface
-    ToSelf,           // For package destined for current node
-}
+pub static CHANNEL_CAPACITY: usize = 32;
 
-#[derive (Debug)]
+#[derive (Debug, Clone)]
 pub enum NodeType {
     Router,
     Host,
@@ -15,7 +13,7 @@ pub enum NodeType {
 
 #[derive (Debug)]
 pub struct Node {
-    n_type: NodeType,
+    pub n_type: NodeType,
     interfaces: Vec<Interface>,
     forwarding_table: HashMap<Ipv4Net, ForwardingOption>,
 }
@@ -32,58 +30,61 @@ impl Node {
             forwarding_table,
         }
     }
-    pub fn run() -> () {}
-    fn check_packet(pack: Packet) -> bool {}
-    fn forward_packet(pack: Packet) -> Result<()> {
+    #[tokio::main]
+    pub async fn run(&mut self, mut recv_rchan: Receiver<CmdType>) -> () {
+        //Spawn all interfaces
+        let interfaces = mem::take(&mut self.interfaces);
+        for interface in interfaces {
+            thread::spawn(move || interface.run());
+        }
+
+        //Listen for REPL prompts from REPL thread and handle them
+        let mut repl_listen = tokio::spawn(async move {
+            loop {
+                match recv_rchan.recv().await {
+                    Some(CmdType::Li) => {},
+                    Some(CmdType::Ln) => {},
+                    Some(CmdType::Lr) => {},
+                    Some(CmdType::Up(inter)) => {},
+                    Some(CmdType::Down(inter)) => {},
+                    Some(CmdType::Send(addr, msg)) => {},
+                    None => panic!("Channel to REPL disconnected :(")
+                }
+            }
+        });
+        //Listen for messages from interfaces and handle them
+        let mut interface_listen = tokio::spawn(async {
+            loop {
+                println!("Me too!!!");
+            }
+        });
+        //Select whether to listen for stuff from the REPL or to listen for interface messages
+        loop {
+            tokio::select! {
+                _ = &mut repl_listen => {},
+                _ = &mut interface_listen => {}
+            }
+        }
+    }
+    //fn check_packet(pack: Packet) -> bool {}
+    //fn forward_packet(pack: Packet) -> Result<()> {
         //Run it through check_packet to see if it should be dropped
         //Extract Destination Ip address
         //Run it through longest prefix
         //See what the value tied to that prefix is
         //If it's an Ip address, repeat with that IP address, an interface, forward via channel to that interface, if it is a ToSelf, handle internally
         //Return
-    }
-    fn longest_prefix(masks: Vec<Ipv4Net>, addr: Ipv4Addr) -> Ipv4Net {}
-    fn process_packet(pack: Packet) -> () {}
+    //}
+    //fn longest_prefix(masks: Vec<Ipv4Net>, addr: Ipv4Addr) -> Ipv4Net {}
+    //fn process_packet(pack: Packet) -> () {}
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct Interface {
-    pub name: String,
-    pub v_ip: Ipv4Addr,
-    pub v_net: Ipv4Net,
-    pub udp_addr: Ipv4Addr,
-    pub udp_port: u16,
-    pub neighbors: HashMap<Ipv4Addr, u16>,
-}
-
-impl Interface {
-    pub fn new(
-        name: &str,
-        v_ip: Ipv4Addr,
-        v_net: Ipv4Net,
-        udp_addr: Ipv4Addr,
-        udp_port: u16,
-        neighbors: HashMap<Ipv4Addr, u16>,
-    ) -> Interface {
-        Interface {
-            name: name.to_string(),
-            v_ip,
-            v_net,
-            udp_addr,
-            udp_port,
-            neighbors,
-        }
-    }
-    // TODO: READ ETHERPARSE DOCS, FIGURE OUT PACKET STRUCTURE
-    pub fn send(pack: Packet) -> Result<()> {}
-    pub fn recv() -> Result<Packet> {}
-}
-
-struct Packet {
-    ttl: u8,
-    protocol: u8,
-    checksum: u16,
-    src_addr: Ipv4Addr,
-    dst_addr: Ipv4Addr,
-    data: String
+#[derive (Debug)]
+pub enum CmdType {
+    Li,
+    Ln,
+    Lr,
+    Up(String),
+    Down(String),
+    Send(String, String)
 }

@@ -1,4 +1,6 @@
+use crate::prelude::*;
 use crate::ip_data_types::*;
+use crate::utils::*;
 
 /*
 pub struct Node {
@@ -21,6 +23,19 @@ fn init_interfaces(
         let my_udp: Ipv4Addr = i.udp_addr;
         let my_port: u16 = i.udp_port;
         let mut my_neighbors: HashMap<Ipv4Addr, u16> = HashMap::new();
+        //Initialize bidirectional channel
+
+        /* let chan1 = channel::<CmdType>(CHANNEL_CAPACITY);
+        let chan2 = channel::<CmdType>(CHANNEL_CAPACITY);
+        let inter_chan = BiChan {
+            send: chan1.0,
+            recv: chan2.1
+        };
+        let node_chan = BiChan {
+            send: chan2.0,
+            recv: chan1.1
+        }; */
+
         // Fill neighbor HashMap from NeighborConfig
         for neigh in &neighbors {
             // Who cares about runtime anyways?
@@ -44,7 +59,7 @@ fn init_interfaces(
 }
 
 /// Handles initializing routers, returns to initialize
-fn initialize(config_info: IPConfig) -> Result<Node> {
+pub fn initialize(config_info: IPConfig) -> Result<Node> {
     // Create initializer for interfaces
     let interfaces = init_interfaces(config_info.interfaces, config_info.neighbors);
     let (n_type, forwarding_table) = match config_info.routing_mode {
