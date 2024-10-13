@@ -14,9 +14,9 @@ Key: Ipv4Net, Val: Route(RouteType, Cost: Option<i32>, ForwardingOption)
 //Used as values of the forwarding table hashmap held by nodes
 #[derive (Debug)]
 pub struct Route {
-    rtype: RouteType, //Indicates how route was learned
-    cost: Option<i32>, //Indicates cost of route (how many hops - important for lr REPL command) - cost can be unknown (for default route), hence the Option
-    next_hop: ForwardingOption //Contains all information needed to proceed with the routing process
+    pub rtype: RouteType, //Indicates how route was learned
+    pub cost: Option<i32>, //Indicates cost of route (how many hops - important for lr REPL command) - cost can be unknown (for default route), hence the Option
+    pub next_hop: ForwardingOption //Contains all information needed to proceed with the routing process
 }
 
 impl Route {
@@ -73,9 +73,18 @@ pub enum InterfaceStatus {
 //Used for messages that a node sends to an interface
 #[derive (Debug)]
 pub enum InterCmd {
-    Send(Packet), //Send this packet
+    BuildSend(PacketBasis), //Build a packet using this PacketBasis and send it - when a send REPL command is used
+    Send(Packet), //Send this packet - when a packet is being forwarded
     ToggleStatus //Make status down if up or up if down
 }
+
+//Used to store the data an interface needs to build a packet and send it
+#[derive (Debug)]
+pub struct PacketBasis{
+    pub dst_ip: String,
+    pub msg: String
+}
+
 
 #[derive(Debug)]
 pub struct Interface {
