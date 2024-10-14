@@ -7,10 +7,11 @@ Key: Ipv4Net, Val: Route(RouteType, Cost: Option<i32>, ForwardingOption)
                         ^(Local | Static | Rip  | ToSelf)   ^(Ip(Ipv4Addr) | Inter(String) | ToSelf)
                                                                                     ^Translate to InterRep via self.interface_reps hashmap
                                                                                                     ^(name:String, status:InterfaceStatus, neighbors:Vec<Ipv4Addr>, chan: BiChan<InterCmd, Packet>)
-                                                                                                                            ^(Up | Down)                                    ^      ^(Send(Packet), ToggleStatus)
+                                                                                                                            ^(Up | Down)                                    ^      ^(BuildSend(PacketBasis), Send(Packet), ToggleStatus)
                                                                                                                                                                             ^(Sender<T>, Receiver<U>)
  */
 
+ pub static INF: i32 = 16;
 
 //Used as values of the forwarding table hashmap held by nodes
 #[derive (Debug)]
@@ -46,22 +47,31 @@ pub enum ForwardingOption {
 #[derive (Debug)]
 pub struct InterfaceRep { 
     pub name: String, //Interface name
+    pub v_net: Ipv4Net,
     pub status: InterfaceStatus, //Interface status
-    pub neighbors: Vec<Ipv4Addr>, //List of the interface's nieghbors 
+    pub neighbors: Vec<(Ipv4Addr, u16)>, //List of the interface's neighbors in (ipaddr, udpport) form
     pub chan: BiChan<InterCmd, Packet>, //Channel to send and receive messages from associated interface (sends InterCmd and receives Packet)
 }
 
 impl InterfaceRep {
-    pub fn new(name: String, neighbors: Vec<Ipv4Addr>, chan: BiChan<InterCmd, Packet>) -> InterfaceRep {
+    pub fn new(name: String, v_net: Ipv4Net, neighbors: Vec<(Ipv4Addr, u16)>, chan: BiChan<InterCmd, Packet>) -> InterfaceRep {
         InterfaceRep {
-            name, 
+            name,
+            v_net, 
             status: InterfaceStatus::Up, //Status always starts as Up
             neighbors, 
             chan
         }
     }
-    fn toggle_status() -> Result<()> {}, //Tells interface to toggle its status
-    fn send_packet(pack: Packet) -> Result<()> {}, //Tells interface to send a packet
+    pub async fn command(&mut self, cmd: InterCmd) -> Result<()> { //Sends the input command to the interface
+        InterfaceRep::get_std_err(self.chan.send.send(cmd).await)
+    }
+    fn get_std_err(res: result::Result<(), mpsc::error::SendError<InterCmd>>) -> Result<()> {
+        match res {
+            Ok(()) => Ok(()),
+            _ => Err(Error::new(ErrorKind::Other, "Error sending packet basis"))
+        }
+    }
 }
 
 //Used to indicate if an Interface is down or up
@@ -82,7 +92,7 @@ pub enum InterCmd {
 //Used to store the data an interface needs to build a packet and send it
 #[derive (Debug)]
 pub struct PacketBasis{
-    pub dst_ip: String,
+    pub dst_ip: Ipv4Addr,
     pub msg: String
 }
 
@@ -141,19 +151,24 @@ impl Interface {
             }
         }
     }
-    // TODO: READ ETHERPARSE DOCS, FIGURE OUT PACKET STRUCTURE
+    fn build(&self, pb: PacketBasis) -> Packet {
+        let src_ip = self.v_ip;
+        let dst_ip = pb.dst_ip;
+        let ttl = INF;
+        let src_udp = self.udp_port;
+        let dst_udp = neighbors
+
+        let builder = PacketBuilder::ipv4()
+    }
     //pub fn send(pack: Packet) -> Result<()> {}
     //pub fn recv() -> Result<Packet> {}
 }
 
+
 #[derive (Debug)]
 pub struct Packet {
-    pub ttl: u8,
-    pub protocol: u8,
-    pub checksum: u16,
-    pub src_addr: Ipv4Addr,
-    pub dst_addr: Ipv4Addr,
-    pub data: String
+    pub header: Ipv4Header,
+    pub data: Vec<u8>
 }
 
 #[derive (Debug)]

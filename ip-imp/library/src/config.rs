@@ -36,7 +36,7 @@ fn init_interfaces(
         };
         // Fill neighbor HashMap AND the InterfaceRep's neighbor vector from NeighborConfig
         let mut my_neighbors: HashMap<Ipv4Addr, u16> = HashMap::new();
-        let mut inter_rep_neighbors: Vec<Ipv4Addr> = Vec::new();
+        let mut inter_rep_neighbors: Vec<(Ipv4Addr, u16)> = Vec::new();
         for neigh in &neighbors {
             // Who cares about runtime anyways?
             // Check if neighbor is reachable by this node
@@ -44,7 +44,7 @@ fn init_interfaces(
                 // If yes, add to my_neighbors
                 // TODO: Account for if UDP address is not localhost, for now we just add <dest_addr, udp_port>
                 my_neighbors.insert(neigh.dest_addr, neigh.udp_port);
-                inter_rep_neighbors.push(neigh.dest_addr);
+                inter_rep_neighbors.push((neigh.dest_addr, neigh.udp_port));
             }
         }
         //Add the completed Interfaces and InterfaceReps to their corresponding vectors for return
@@ -61,6 +61,7 @@ fn init_interfaces(
             ),
             InterfaceRep::new(
                 my_name, 
+                my_prefix,
                 inter_rep_neighbors,
                 inter_rep_chan,
             ))

@@ -6,7 +6,6 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 pub static CHANNEL_CAPACITY: usize = 32;
-static INF: i32 = 16;
 
 #[derive (Debug, Clone)]
 pub enum NodeType {
@@ -58,9 +57,9 @@ impl Node {
                     Some(CmdType::Li) => slf.li(),
                     Some(CmdType::Ln) => slf.ln(),
                     Some(CmdType::Lr) => slf.lr(),
-                    Some(CmdType::Up(inter)) => slf.up(inter),
-                    Some(CmdType::Down(inter)) => slf.down(inter),
-                    Some(CmdType::Send(addr, msg)) => slf.send(addr, msg),
+                    Some(CmdType::Up(inter)) => slf.up(inter).await,
+                    Some(CmdType::Down(inter)) => slf.down(inter).await,
+                    Some(CmdType::Send(addr, msg)) => slf.send(addr, msg).await,
                     None => panic!("Channel to REPL disconnected :(")
                 }
             }
@@ -90,17 +89,79 @@ impl Node {
             }
         }
     }
-    fn li(&self) -> () {}
-    fn ln(&self) -> () {}
-    fn lr(&self) -> () {}
-    fn up(&mut self, inter: String) -> () {}
-    fn down(&mut self, inter: String) -> () {}
-    fn send(&mut self, addr: String, msg: String) -> () {
+    fn li(&self) -> () {
+        println!("Name\tAddr/Prefix\tState");
+        for inter_rep in self.interface_reps.values() {
+            let status = match inter_rep.status {
+                InterfaceStatus::Up => "up",
+                InterfaceStatus::Down => "down"
+            };
+            println!("{}\t{}/{}\t{}", inter_rep.name, inter_rep.v_net.addr(), inter_rep.v_net.prefix_len(), status)
+        }
+    }
+    fn ln(&self) -> () {
+        println!("Iface\tVIP\t\tUDPAddr");
+        for inter_rep in self.interface_reps.values() {
+            for neighbor in &inter_rep.neighbors {
+                println!("{}\t{}\t127.0.0.1:{}", inter_rep.name, neighbor.0, neighbor.1);
+            }
+        }
+    }
+    fn lr(&self) -> () {
+        println!("T\tPrefix\t\tNext hop\tCost");
+        for (v_net, route) in &self.forwarding_table {
+            let cost = match &route.cost {
+                Some(num) => num.to_string(), 
+                None => String::from("-")
+            };
+            let next_hop = match &route.next_hop {
+                ForwardingOption::Ip(ip) => ip.to_string(),
+                ForwardingOption::Inter(inter) => "LOCAL:".to_string() + inter, 
+                ForwardingOption::ToSelf => continue //Skip because don't print routes to self
+            };
+            let r_type = 
+
+
+    match route.rtype {
+                RouteType::Rip => "R",
+                RouteType::Local => "L",
+                RouteType::Static => "S",
+                RouteType::ToSelf => continue, //Should never get here
+            };
+            println!("{}\t{}/{}\t{}\t{}", r_type, v_net.addr(), v_net.prefix_len(), next_hop, cost)
+        } 
+    }
+    async fn up(&mut self, inter: String) -> () {
+        let inter_rep = self.interface_reps.get_mut(&inter).unwrap();
+        match inter_rep.status {
+            InterfaceStatus::Up => {}, //Don't do anything if already up
+            InterfaceStatus::Down => {
+                inter_rep.command(InterCmd::ToggleStatus).await.expect("Error connecting to interface");
+                inter_rep.status = InterfaceStatus::Up;
+            }
+        }
+    }
+    async fn down(&mut self, inter: String) -> () {
+        let inter_rep = self.interface_reps.get_mut(&inter).unwrap();
+        match inter_rep.status {
+            InterfaceStatus::Up => {
+                inter_rep.command(InterCmd::ToggleStatus).await.expect("Error connecting to interface");
+                inter_rep.status = InterfaceStatus::Down;
+            },
+            InterfaceStatus::Down => {} //Don't do anything if already down
+        }
+    }
+    async fn send(&mut self, addr: String, msg: String) -> () {
+        let ip_addr = addr.as_str().parse().expect("Invalid ip address"); //FIX THIS LATER
         let pb = PacketBasis {
-            dst_ip: addr,
+            dst_ip: ip_addr,
             msg
         };
-        //let inter_name = self.proper_interface(Ipv4Addr::from(addr));
+        let inter_rep = match self.proper_interface(&ip_addr) {
+            Some(name) => self.interface_reps.get_mut(&name.clone()).unwrap(),
+            None => panic!("Packet sent to self") //FIX THIS LATER
+        };
+        inter_rep.command(InterCmd::BuildSend(pb)).await.expect("Error sending connecting to interface or sending packet"); //COULD BE MORE ROBUST
     }
     async fn forward_packet(&mut self, pack: Packet) -> Result<()> { //Made it async cause it'll give some efficiency gains with sending through the channel (I think)
         //Run it through check_packet to see if it should be dropped
@@ -116,14 +177,13 @@ impl Node {
         //Find the proper interface and hand the packet off to it
         let inter_rep_name = inter_rep_name.clone(); //Why? To get around stinkin Rust borrow checker. Get rid of this line (and the borrow on the next) to see why. Ugh
         let inter_rep = self.interface_reps.get_mut(&inter_rep_name).unwrap();
-        inter_rep.chan.send.send(InterCmd::Send(pack));
-        Ok(())
+        inter_rep.command(InterCmd::Send(pack)).await
     }
     fn proper_interface(&self, dst_addr: &Ipv4Addr) -> Option<&String> {
         let mut dst_ip = dst_addr;
         loop { //Loop until bottom out at a route that sends to an interface
             //Run it through longest prefix
-            let netmask = Node::longest_prefix(self.forwarding_table.keys().collect(), dst_ip);
+            let netmask = Node::longest_prefix(self.forwarding_table.keys().collect(), dst_ip).expect("Couldn't find matching prefix for {netmask:?}");
             //See what the value tied to that prefix is
             let route = self.forwarding_table.get(&netmask).unwrap();
             //If it's an Ip address, repeat with that IP address, an interface, forward via channel to that interface, if it is a ToSelf, handle internally
@@ -134,10 +194,40 @@ impl Node {
             };
         }
     }
-    fn packet_valid(pack: &Packet) -> bool {}
+    fn packet_valid(pack: Packet) -> bool {
+        // Get header
+        let pack_head: Ipv4Header = pack.header;
+
+        // Obtain ttl, check if not zero
+        let ttl = pack_head.time_to_live;
+        if ttl == 0 {
+            return false;
+        } 
+
+        // Obtain checksum, check if correct calculation
+        let checksum = pack_head.header_checksum;
+        let checksum_correct = pack_head.calc_header_checksum();
+        return checksum == checksum_correct;
+    }
+    fn update_pack(pack: Packet) -> Packet {
+        // Get header
+        let mut pack_head: Ipv4Header = pack.header;
+        // Decrement ttl
+        let ttl = pack_head.time_to_live;
+        if ttl != 0 {
+            pack_head.time_to_live = ttl - 1;
+        } else {
+            eprintln!("What the fuck");
+        }
+        pack_head.header_checksum = pack_head.calc_header_checksum();
+
+        // Rebuild packet
+        let updated_pack: Packet = Packet { header: pack_head, data: pack.data };
+        return updated_pack;
+    }
 
     /// There's a way to do this with a trie, but I'm unsure if I... want to. 
-    fn longest_prefix(masks: Vec<&Ipv4Net>, addr: &Ipv4Addr) -> Result<String, Ipv4Net> {
+    fn longest_prefix(masks: Vec<&Ipv4Net>, addr: &Ipv4Addr) -> Result<Ipv4Net> {
         // Put the thing in
     }
 
