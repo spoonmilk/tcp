@@ -72,15 +72,9 @@ impl InterfaceRep {
             chan,
         }
     }
-    pub async fn command(&mut self, cmd: InterCmd) -> Result<()> {
+    pub async fn command(&mut self, cmd: InterCmd) -> result::Result<(), mpsc::error::SendError<InterCmd>> {
         //Sends the input command to the interface
-        InterfaceRep::get_std_err(self.chan.send.send(cmd).await)
-    }
-    fn get_std_err(res: result::Result<(), mpsc::error::SendError<InterCmd>>) -> Result<()> {
-        match res {
-            Ok(()) => Ok(()),
-            _ => Err(Error::new(ErrorKind::Other, "Error sending packet basis")),
-        }
+        self.chan.send.send(cmd).await
     }
 }
 
@@ -140,16 +134,33 @@ impl Interface {
         }
     }
     pub async fn run(self) -> () {
+        //Create mutexes to protect self
+        let self_mutex1 = Arc::new(Mutex::new(self));
+        let self_mutex2 = Arc::clone(&self_mutex1);
         //Listen for commands from the almighty node
-        let mut node_listen = tokio::spawn(async {
+        let mut node_listen = tokio::spawn(async move {
             loop {
-                println!("LISTENING TO NODE");
+                let mut slf = self_mutex1.lock().await;
+                let chan_res = slf.chan.recv.recv().await;
+                match chan_res {
+                    Some(InterCmd::BuildSend(pb, next_hop)) => slf.send(slf.build(pb), next_hop).await.expect("Error sending packet"),
+                    Some(InterCmd::Send(pack, next_hop)) => slf.send(pack, next_hop).await.expect("Error sending packet"),
+                    Some(InterCmd::ToggleStatus) => slf.toggle_status(),
+                    None => panic!("Channel to almight node disconnected :(")
+                }
             }
         });
         //Listen for packets coming out of the ether-void
-        let mut ether_listen = tokio::spawn(async {
+        let mut ether_listen = tokio::spawn(async move {
             loop {
-                println!("LISTENING FOR MESSAGES FROM THE VOID");
+                match self.status {
+                    InterfaceStatus::Up => {
+                        let mut slf = self_mutex2.lock().await;
+                        let pack = slf.recv().await.expect("Error receiving packet");
+                        self.pass_packet(pack).await.expect("Channel to almighty node disconnected");
+                    },
+                    InterfaceStatus::Down => tokio::task::yield_now().await //Avoids busy waiting
+                }
             }
         });
         //Switch betwen listening for node commands or ether packets
@@ -160,12 +171,18 @@ impl Interface {
             }
         }
     }
+    fn toggle_status(&mut self) -> () {
+        match self.status {
+            InterfaceStatus::Up => self.status = InterfaceStatus::Down,
+            InterfaceStatus::Down => self.status = InterfaceStatus::Up
+        }
+    }
     fn build(&self, pb: PacketBasis) -> Vec<u8> {
         let src_ip = self.v_ip;
         let dst_ip = pb.dst_ip;
         let ttl = INF;
         let src_udp = self.udp_port;
-        let dst_udp = self.neighbors[&dst_ip];
+        let dst_udp = self.neighbors.get(&dst_ip).unwrap().clone();
         let builder =
             PacketBuilder::ipv4(src_ip.octets(), dst_ip.octets(), ttl as u8).udp(src_udp, dst_udp);
 
@@ -176,7 +193,7 @@ impl Interface {
         builder.write(&mut result, &payload).unwrap();
         result
     }
-    pub async fn send(&mut self, pack: Vec<u8>, next_hop: Ipv4Addr) -> io::Result<()> {
+    pub async fn send(&mut self, pack: Packet, next_hop: Ipv4Addr) -> io::Result<()> {
         let dst_neighbor = self.neighbors.get(&next_hop).unwrap();
         let bind_addr = format!("127.0.0.1:{}", self.udp_port);
         match UdpSocket::bind(bind_addr) {
@@ -208,6 +225,9 @@ impl Interface {
             }
             Err(e) => Err(e)
         }
+    }
+    async fn pass_packet(&mut self, pack: Packet) -> result::Result<(), mpsc::error::SendError<Packet>> {
+        self.chan.send.send(pack).await
     }
 }
 
