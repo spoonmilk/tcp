@@ -165,9 +165,10 @@ impl Node {
     }
     async fn forward_packet(&mut self, pack: Packet) -> Result<()> { //Made it async cause it'll give some efficiency gains with sending through the channel (I think)
         //Run it through check_packet to see if it should be dropped
-        if !Node::packet_valid(&pack) {return Ok(())};
+        if !Node::packet_valid(pack.clone()) {return Ok(())};
+        let pack_header = pack.clone().header; 
         //Get the proper interface's name
-        let inter_rep_name = match self.proper_interface(&pack.dst_addr) {
+        let inter_rep_name = match self.proper_interface(&Ipv4Addr::from(pack_header.destination)) {
             Some(name) => name,
             None => {
                 self.process_packet(pack);
@@ -229,6 +230,12 @@ impl Node {
     /// There's a way to do this with a trie, but I'm unsure if I... want to. 
     fn longest_prefix(masks: Vec<&Ipv4Net>, addr: &Ipv4Addr) -> Result<Ipv4Net> {
         // Put the thing in
+
+        // Create a vector of Ipv4Net prefixes/addrs
+        let pref_vec: Vec<Ipv4Addr> = Vec::new();
+        let trie_vec: Vec<TrieNode> = Vec::new();
+
+        
     }
 
     fn process_packet(&self, pack: Packet) -> () {}

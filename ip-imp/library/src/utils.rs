@@ -151,21 +151,28 @@ impl Interface {
             }
         }
     }
-    fn build(&self, pb: PacketBasis) -> Packet {
+    fn build(&self, pb: PacketBasis) -> Vec<u8> {
         let src_ip = self.v_ip;
         let dst_ip = pb.dst_ip;
         let ttl = INF;
         let src_udp = self.udp_port;
-        let dst_udp = neighbors
+        let dst_udp = self.neighbors[&dst_ip];
+        let builder = PacketBuilder::ipv4(src_ip.octets(), dst_ip.octets(), ttl as u8).udp(src_udp, dst_udp);
 
-        let builder = PacketBuilder::ipv4()
+        let payload: &[u8] = pb.msg.as_bytes();
+        let mut result = Vec::<u8>::with_capacity(
+            builder.size(payload.len()));
+
+        //serialize
+        builder.write(&mut result, &payload).unwrap();   
+        }
     }
     //pub fn send(pack: Packet) -> Result<()> {}
     //pub fn recv() -> Result<Packet> {}
 }
 
 
-#[derive (Debug)]
+#[derive (Debug, Clone)]
 pub struct Packet {
     pub header: Ipv4Header,
     pub data: Vec<u8>
@@ -179,7 +186,7 @@ pub struct BiChan<T,U> {
 
 /// Structs for forwarding table longest prefix match implementation
 #[derive (Default, Debug, Clone)]
-struct TrieNode {
+pub struct TrieNode {
     is_end: bool, // Utility boolean, true for end of IP/start of mask
     children: HashMap<u8, TrieNode>, 
     route: String
