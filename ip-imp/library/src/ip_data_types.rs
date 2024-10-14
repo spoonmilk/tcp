@@ -135,7 +135,12 @@ impl Node {
         }
     }
     fn packet_valid(pack: &Packet) -> bool {}
-    fn longest_prefix(masks: Vec<&Ipv4Net>, addr: &Ipv4Addr) -> Ipv4Net {}
+
+    /// There's a way to do this with a trie, but I'm unsure if I... want to. 
+    fn longest_prefix(masks: Vec<&Ipv4Net>, addr: &Ipv4Addr) -> Result<String, Ipv4Net> {
+        // Put the thing in
+    }
+
     fn process_packet(&self, pack: Packet) -> () {}
     
 }
