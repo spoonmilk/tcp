@@ -84,8 +84,8 @@ pub enum InterfaceStatus {
 //Used for messages that a node sends to an interface
 #[derive (Debug)]
 pub enum InterCmd {
-    BuildSend(PacketBasis), //Build a packet using this PacketBasis and send it - when a send REPL command is used
-    Send(Packet), //Send this packet - when a packet is being forwarded
+    BuildSend(PacketBasis, Ipv4Addr), //Build a packet using this PacketBasis and send it - when a send REPL command is used
+    Send(Packet, Ipv4Addr), //Send this packet - when a packet is being forwarded
     ToggleStatus //Make status down if up or up if down
 }
 
@@ -164,8 +164,8 @@ impl Interface {
             builder.size(payload.len()));
 
         //serialize
-        builder.write(&mut result, &payload).unwrap();   
-        }
+        builder.write(&mut result, &payload).unwrap();
+        result
     }
     //pub fn send(pack: Packet) -> Result<()> {}
     //pub fn recv() -> Result<Packet> {}

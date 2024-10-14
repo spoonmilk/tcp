@@ -157,19 +157,19 @@ impl Node {
             dst_ip: ip_addr,
             msg
         };
-        let inter_rep = match self.proper_interface(&ip_addr) {
-            Some(name) => self.interface_reps.get_mut(&name.clone()).unwrap(),
+        let (inter_rep, next_hop) = match self.proper_interface(&ip_addr) {
+            Some((name, next_hop)) => (self.interface_reps.get_mut(&name.clone()).unwrap(), next_hop),
             None => panic!("Packet sent to self") //FIX THIS LATER
         };
-        inter_rep.command(InterCmd::BuildSend(pb)).await.expect("Error sending connecting to interface or sending packet"); //COULD BE MORE ROBUST
+        inter_rep.command(InterCmd::BuildSend(pb, next_hop)).await.expect("Error sending connecting to interface or sending packet"); //COULD BE MORE ROBUST
     }
     async fn forward_packet(&mut self, pack: Packet) -> Result<()> { //Made it async cause it'll give some efficiency gains with sending through the channel (I think)
         //Run it through check_packet to see if it should be dropped
         if !Node::packet_valid(pack.clone()) {return Ok(())};
         let pack_header = pack.clone().header; 
         //Get the proper interface's name
-        let inter_rep_name = match self.proper_interface(&Ipv4Addr::from(pack_header.destination)) {
-            Some(name) => name,
+        let (inter_rep_name, next_hop) = match self.proper_interface(&Ipv4Addr::from(pack_header.destination)) {
+            Some((name, next_hop)) => (name, next_hop),
             None => {
                 self.process_packet(pack);
                 return Ok(());
@@ -178,9 +178,9 @@ impl Node {
         //Find the proper interface and hand the packet off to it
         let inter_rep_name = inter_rep_name.clone(); //Why? To get around stinkin Rust borrow checker. Get rid of this line (and the borrow on the next) to see why. Ugh
         let inter_rep = self.interface_reps.get_mut(&inter_rep_name).unwrap();
-        inter_rep.command(InterCmd::Send(pack)).await
+        inter_rep.command(InterCmd::Send(pack, next_hop)).await
     }
-    fn proper_interface(&self, dst_addr: &Ipv4Addr) -> Option<&String> {
+    fn proper_interface(&self, dst_addr: &Ipv4Addr) -> Option<(&String, &Ipv4Addr)> {
         let mut dst_ip = dst_addr;
         loop { //Loop until bottom out at a route that sends to an interface
             //Run it through longest prefix
@@ -189,7 +189,7 @@ impl Node {
             let route = self.forwarding_table.get(&netmask).unwrap();
             //If it's an Ip address, repeat with that IP address, an interface, forward via channel to that interface, if it is a ToSelf, handle internally
             dst_ip = match &route.next_hop {
-                ForwardingOption::Inter(name) => break Some(name),
+                ForwardingOption::Inter(name) => break Some((name, dst_ip)),
                 ForwardingOption::Ip(ip) => ip,
                 ForwardingOption::ToSelf => break None
             };
