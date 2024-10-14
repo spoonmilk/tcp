@@ -140,16 +140,29 @@ impl Interface {
         }
     }
     pub async fn run(self) -> () {
+        //Create mutexes to protect self
+        let self_mutex1 = Arc::new(Mutex::new(self));
+        let self_mutex2 = Arc::clone(&self_mutex1);
         //Listen for commands from the almighty node
-        let mut node_listen = tokio::spawn(async {
+        let mut node_listen = tokio::spawn(async move {
             loop {
-                println!("LISTENING TO NODE");
+                let mut slf = self_mutex1.lock().await;
+                let chan_res = slf.chan.recv.recv().await;
+                match chan_res {
+                    Some(InterCmd::BuildSend(pb, next_hop)) => slf.send(slf.build(pb), next_hop).await.expect("Error sending packet"),
+                    Some(InterCmd::Send(pack, next_hop)) => slf.send(pack, next_hop).await.expect("Error sending packet"),
+                    Some(InterCmd::ToggleStatus) => slf.toggle_status(),
+                    None => panic!("Channel to almight node disconnected :(")
+                }
             }
         });
         //Listen for packets coming out of the ether-void
-        let mut ether_listen = tokio::spawn(async {
+        let mut ether_listen = tokio::spawn(async move {
             loop {
-                println!("LISTENING FOR MESSAGES FROM THE VOID");
+                let mut slf = self_mutex2.lock().await;
+                let raw_pack = slf.recv().await;
+                
+
             }
         });
         //Switch betwen listening for node commands or ether packets
@@ -158,6 +171,12 @@ impl Interface {
                 _ = &mut node_listen => {},
                 _ = &mut ether_listen => {}
             }
+        }
+    }
+    fn toggle_status(&mut self) -> () {
+        match self.status {
+            InterfaceStatus::Up => self.status = InterfaceStatus::Down,
+            InterfaceStatus::Down => self.status = InterfaceStatus::Up
         }
     }
     fn build(&self, pb: PacketBasis) -> Vec<u8> {

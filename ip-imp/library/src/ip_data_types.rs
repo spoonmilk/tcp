@@ -2,8 +2,6 @@ use std::thread;
 use crate::prelude::*;
 use crate::utils::*;
 use std::mem;
-use std::sync::Arc;
-use tokio::sync::Mutex;
 
 pub static CHANNEL_CAPACITY: usize = 32;
 
@@ -77,7 +75,9 @@ impl Node {
                         Err(TryRecvError::Disconnected) => panic!("Channel disconnected for some reason")
                     } 
                 }
-                packets.into_iter().for_each(|pack| slf.forward_packet(pack).expect("Error forwarding packet"));
+                for pack in packets {
+                    slf.forward_packet(pack).await.expect("Error forwarding packet");
+                }
                 tokio::task::yield_now().await; //Make sure listening for messages from interfaces doesn't hog all the time
             }
         });
@@ -180,7 +180,7 @@ impl Node {
         let inter_rep = self.interface_reps.get_mut(&inter_rep_name).unwrap();
         inter_rep.command(InterCmd::Send(pack, next_hop)).await
     }
-    fn proper_interface(&self, dst_addr: &Ipv4Addr) -> Option<(&String, &Ipv4Addr)> {
+    fn proper_interface(&self, dst_addr: &Ipv4Addr) -> Option<(&String, Ipv4Addr)> {
         let mut dst_ip = dst_addr;
         loop { //Loop until bottom out at a route that sends to an interface
             //Run it through longest prefix
@@ -189,7 +189,7 @@ impl Node {
             let route = self.forwarding_table.get(&netmask).unwrap();
             //If it's an Ip address, repeat with that IP address, an interface, forward via channel to that interface, if it is a ToSelf, handle internally
             dst_ip = match &route.next_hop {
-                ForwardingOption::Inter(name) => break Some((name, dst_ip)),
+                ForwardingOption::Inter(name) => break Some((name, dst_ip.clone())),
                 ForwardingOption::Ip(ip) => ip,
                 ForwardingOption::ToSelf => break None
             };
