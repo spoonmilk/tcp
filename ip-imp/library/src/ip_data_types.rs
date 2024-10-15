@@ -231,13 +231,23 @@ impl Node {
     fn longest_prefix(masks: Vec<&Ipv4Net>, addr: &Ipv4Addr) -> Result<Ipv4Net> {
         // Put the thing in
 
-        // Create a vector of Ipv4Net prefixes/addrs
-        let pref_vec: Vec<Ipv4Addr> = Vec::new();
-        let trie_vec: Vec<TrieNode> = Vec::new();
+        // // Create a vector of Ipv4Net prefixes/addrs
+        // let pref_vec: Vec<Ipv4Addr> = Vec::new();
+        // let trie_vec: Vec<TrieNode> = Vec::new();
 
-        
+        // For now, linear search
+        let mut trie_node = TrieNode::new();
+        for mask in masks {
+            trie_node.insert(mask.network());
+        }
+        match trie_node.search(addr) {
+            Ok(search_res) => {
+                let address: Ipv4Addr = search_res.parse().expect("fuck");
+                return Ok(Ipv4Net::from(address));
+            },
+            Err(e) => Err(e)
+        }
     }
-
     fn process_packet(&self, pack: Packet) -> () {}
     
 }

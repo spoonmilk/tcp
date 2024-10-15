@@ -221,18 +221,21 @@ impl Interface {
         }
     }
     pub async fn recv(&mut self) -> Result<Packet> {
-        let received = false;
+        let mut received = false;
         match UdpSocket::bind(format!("127.0.0.1:{}", self.udp_port)) {
             Ok(socket) => {
-                let mut buf: [u8; 60] = [0 ; 60];
+                let mut buf:[u8; 40] = [0; 40];
                 while !received {
-                    socket.recv(&mut buf)?; // Break if receive
+                    let len = socket.recv(&mut buf)?; // Break if receive
+                    if len != 0 {
+                        received = !received;
+                    }
                 }
                 match Ipv4Header::from_slice(&buf) {
-                    Ok((pack_head, rest)) => {
-                        let payload_vec = Vec::from(rest);
-                        let pack_res = Packet { header: pack_head, data: payload_vec }; 
-                        return Ok(pack_res)
+                    Ok((head, rest)) => {
+                        let len = (head.total_len - 20) as usize ;
+                        let pay: Vec<u8> = Vec::from_iter(rest[0..len].iter().cloned());
+                        return Ok(Packet { header: head, data: pay});
                     }
                     Err(_) => return Err(Error::new(ErrorKind::InvalidData, "Failed to read received packet error"))
                 }
