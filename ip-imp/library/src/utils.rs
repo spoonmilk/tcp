@@ -178,32 +178,40 @@ impl Interface {
         }
     }
     fn build(&self, pb: PacketBasis) -> Packet {
+        // Grabbing info from sending interface for header
         let src_ip = self.v_ip;
         let dst_ip = pb.dst_ip;
-        let ttl = INF;
+        let ttl: u8 = 16; // Default TTL from handout
+        // Instantiate payload
         let payload: Vec<u8> = Vec::from(pb.msg.as_bytes());
-
+        // Create the header
         let mut header = Ipv4Header {
             source: src_ip.octets(),
             destination: dst_ip.octets(),
-            time_to_live : ttl as u8, 
+            time_to_live : ttl, 
             total_len: Ipv4Header::MIN_LEN_U16 + pb.msg.len() as u16,
             protocol: IpNumber::UDP, 
             ..Default::default()
         };
+        // Checksum
         header.header_checksum = header.calc_header_checksum();
-        return Packet { header, data: payload }
+        return Packet { header, data: payload } // Packet built!
     }
-    pub async fn send(&mut self, pack: Packet, next_hop: Ipv4Addr) -> io::Result<()> {
+    pub async fn send(&mut self, pack: Packet, next_hop: Ipv4Addr) -> Result<()> {
+        // Grab neighbor address to send to
         let dst_neighbor = self.neighbors.get(&next_hop).unwrap();
+        // Self address for binding
         let bind_addr = format!("127.0.0.1:{}", self.udp_port);
+        // Bind to Udp port and attempt to send to neighbor
         match UdpSocket::bind(bind_addr) {
             Ok(socket) => {
-                match socket.send_to(&pack, format!("127.0.0.1:{}", dst_neighbor)) {
+                match socket.send_to(&pack.data, format!("127.0.0.1:{}", dst_neighbor)) {
+                    // TODO: Do something on Ok? Make error more descriptive?
                     Ok(_) => Ok(()),
                     Err(e) => Err(e)
                 }
             }
+            // TODO: Less shitty error
             Err(e) => Err(e)
         }
     }
