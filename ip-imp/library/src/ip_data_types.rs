@@ -163,7 +163,7 @@ impl Node {
         };
         inter_rep.command(InterCmd::BuildSend(pb, next_hop)).await.expect("Error sending connecting to interface or sending packet"); //COULD BE MORE ROBUST
     }
-    async fn forward_packet(&mut self, pack: Packet) -> Result<()> { //Made it async cause it'll give some efficiency gains with sending through the channel (I think)
+    async fn forward_packet(&mut self, pack: Packet) -> std::result::Result<(), SendError<InterCmd>> { //Made it async cause it'll give some efficiency gains with sending through the channel (I think)
         //Run it through check_packet to see if it should be dropped
         if !Node::packet_valid(pack.clone()) {return Ok(())};
         let pack_header = pack.clone().header; 

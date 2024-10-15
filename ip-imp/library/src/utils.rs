@@ -1,5 +1,5 @@
 use crate::prelude::*;
-use std::{intrinsics::mir::Discriminant, io::{Error, ErrorKind}, os::unix::net::SocketAddr};
+use std::io::{Error, ErrorKind};
 
 /*
 INCREDIBLY CONFUSING CHART OF FWDING TABLE STRUCTURE INTENDED TO MAKE SAID STRUCTURE LESS CONFUSING
@@ -137,27 +137,31 @@ impl Interface {
         //Create mutexes to protect self
         let self_mutex1 = Arc::new(Mutex::new(self));
         let self_mutex2 = Arc::clone(&self_mutex1);
+
         //Listen for commands from the almighty node
         let mut node_listen = tokio::spawn(async move {
-            loop {
-                let mut slf = self_mutex1.lock().await;
-                let chan_res = slf.chan.recv.recv().await;
+            let mut slf1 = self_mutex1.lock().await;
+            loop { 
+                let chan_res = slf1.chan.recv.recv().await;
                 match chan_res {
-                    Some(InterCmd::BuildSend(pb, next_hop)) => slf.send(slf.build(pb), next_hop).await.expect("Error sending packet"),
-                    Some(InterCmd::Send(pack, next_hop)) => slf.send(pack, next_hop).await.expect("Error sending packet"),
-                    Some(InterCmd::ToggleStatus) => slf.toggle_status(),
+                    Some(InterCmd::BuildSend(pb, next_hop)) => { 
+                        let builded = slf1.build(pb);
+                        slf1.send(builded, next_hop).await.expect("Error sending packet") 
+                    }
+                    Some(InterCmd::Send(pack, next_hop)) => slf1.send(pack, next_hop).await.expect("Error sending packet"),
+                    Some(InterCmd::ToggleStatus) => slf1.toggle_status(),
                     None => panic!("Channel to almight node disconnected :(")
                 }
             }
         });
         //Listen for packets coming out of the ether-void
         let mut ether_listen = tokio::spawn(async move {
+            let mut slf2 = self_mutex2.lock().await;
             loop {
-                match self.status {
-                    InterfaceStatus::Up => {
-                        let mut slf = self_mutex2.lock().await;
-                        let pack = slf.recv().await.expect("Error receiving packet");
-                        self.pass_packet(pack).await.expect("Channel to almighty node disconnected");
+                match slf2.status {
+                    InterfaceStatus::Up => { 
+                        let pack = slf2.recv().await.expect("Error receiving packet");
+                        slf2.pass_packet(pack).await.expect("Channel to almighty node disconnected");
                     },
                     InterfaceStatus::Down => tokio::task::yield_now().await //Avoids busy waiting
                 }
@@ -171,13 +175,14 @@ impl Interface {
             }
         }
     }
+
     fn toggle_status(&mut self) -> () {
         match self.status {
             InterfaceStatus::Up => self.status = InterfaceStatus::Down,
             InterfaceStatus::Down => self.status = InterfaceStatus::Up
         }
     }
-    fn build(&self, pb: PacketBasis) -> Packet {
+    fn build(&mut self, pb: PacketBasis) -> Packet {
         // Grabbing info from sending interface for header
         let src_ip = self.v_ip;
         let dst_ip = pb.dst_ip;
@@ -221,7 +226,7 @@ impl Interface {
             Ok(socket) => {
                 let mut buf: [u8; 60] = [0 ; 60];
                 while !received {
-                    let len = socket.recv(&mut buf)?; // Break if receive
+                    socket.recv(&mut buf)?; // Break if receive
                 }
                 match Ipv4Header::from_slice(&buf) {
                     Ok((pack_head, rest)) => {
