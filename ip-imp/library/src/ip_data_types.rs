@@ -248,7 +248,14 @@ impl Node {
             Err(e) => Err(e)
         }
     }
-    fn process_packet(&self, pack: Packet) -> () {}
+    fn process_packet(&self, pack: Packet) -> () {
+        let src = String::from_utf8(Vec::from(pack.header.source)).unwrap();
+        let dst = String::from_utf8(Vec::from(pack.header.destination)).unwrap();
+        let ttl = pack.header.time_to_live;
+        let msg = String::from_utf8(pack.data).unwrap();
+        let retstr = format!("Received tst packet: Src: {}, Dst: {}, TTL: {}, {}", src, dst, ttl, msg);
+        println!("{}", retstr);
+    }
     
 }
 
