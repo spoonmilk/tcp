@@ -1,5 +1,5 @@
 use crate::prelude::*;
-use std::{io::{Error, ErrorKind}, os::unix::net::SocketAddr};
+use std::{intrinsics::mir::Discriminant, io::{Error, ErrorKind}, os::unix::net::SocketAddr};
 
 /*
 INCREDIBLY CONFUSING CHART OF FWDING TABLE STRUCTURE INTENDED TO MAKE SAID STRUCTURE LESS CONFUSING
@@ -177,21 +177,22 @@ impl Interface {
             InterfaceStatus::Down => self.status = InterfaceStatus::Up
         }
     }
-    fn build(&self, pb: PacketBasis) -> Vec<u8> {
+    fn build(&self, pb: PacketBasis) -> Packet {
         let src_ip = self.v_ip;
         let dst_ip = pb.dst_ip;
         let ttl = INF;
-        let src_udp = self.udp_port;
-        let dst_udp = self.neighbors.get(&dst_ip).unwrap().clone();
-        let builder =
-            PacketBuilder::ipv4(src_ip.octets(), dst_ip.octets(), ttl as u8).udp(src_udp, dst_udp);
+        let payload: Vec<u8> = Vec::from(pb.msg.as_bytes());
 
-        let payload: &[u8] = pb.msg.as_bytes();
-        let mut result = Vec::<u8>::with_capacity(builder.size(payload.len()));
-
-        //serialize
-        builder.write(&mut result, &payload).unwrap();
-        result
+        let mut header = Ipv4Header {
+            source: src_ip.octets(),
+            destination: dst_ip.octets(),
+            time_to_live : ttl as u8, 
+            total_len: Ipv4Header::MIN_LEN_U16 + pb.msg.len() as u16,
+            protocol: IpNumber::UDP, 
+            ..Default::default()
+        };
+        header.header_checksum = header.calc_header_checksum();
+        return Packet { header, data: payload }
     }
     pub async fn send(&mut self, pack: Packet, next_hop: Ipv4Addr) -> io::Result<()> {
         let dst_neighbor = self.neighbors.get(&next_hop).unwrap();
