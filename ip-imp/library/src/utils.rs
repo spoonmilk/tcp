@@ -9,9 +9,7 @@ Key: Ipv4Net, Val: Route(RouteType, Cost: Option<i32>, ForwardingOption)
                                                                                                     ^(name:String, status:InterfaceStatus, neighbors:Vec<Ipv4Addr>, chan: BiChan<InterCmd, Packet>)
                                                                                                                             ^(Up | Down)                                    ^      ^(BuildSend(PacketBasis), Send(Packet), ToggleStatus)
                                                                                                                                                                             ^(Sender<T>, Receiver<U>)
- */
-
-pub static INF: i32 = 16;
+*/
 
 //Used as values of the forwarding table hashmap held by nodes
 #[derive(Debug)]
