@@ -136,7 +136,7 @@ pub fn initialize(config_info: IPConfig) -> Result<Node> {
         }
         RoutingType::Rip => {
             // Node is an evil router
-            panic!("Did you ever hear the tragedy of Darth Plagueis the wise? No. I thought not, It's No story the jedi would tell you. It's a sith legend. Darth Plagueis was a Dark Lord of the sith. He was so powerful, Yet so wise. He could use the force to influence the medi chlorians to create, Life. He had such a knowledge of the Dark side, He could even keep the ones he cared about, From dying. He could actually, Save the ones he cared about from death? The dark side of the force is a pathway to many abilities some consider to be unnatural. Well what happened to him? Darth Plagueis became so powerful that the only thing he feared was losing his power, Which eventually of course he did. Unfortunately, He taught his apprentice everything he knew. Then his apprentice killed him in his sleep. Ironic, He could save others from death, But not himself. Is it possible to learn this power? Not from a jedi.");
+            eprintln!("RIP routing not yet implemented"); 
         }
     };
     let node = Node::new(n_type, interfaces, interface_reps, forwarding_table);

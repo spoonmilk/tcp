@@ -1,17 +1,17 @@
-use std::thread;
 use crate::prelude::*;
 use crate::utils::*;
 use std::mem;
+use std::thread;
 
 pub static CHANNEL_CAPACITY: usize = 32;
 
-#[derive (Debug, Clone)]
+#[derive(Debug, Clone)]
 pub enum NodeType {
     Router,
     Host,
 }
 
-#[derive (Debug)]
+#[derive(Debug)]
 pub struct Node {
     pub n_type: NodeType,
     interfaces: Vec<Interface>, //Is depleted upon startup when all interface threads are spawned - use interface_reps to find information about each interface
@@ -24,8 +24,8 @@ pub struct Node {
 impl Node {
     pub fn new(
         n_type: NodeType,
-        interfaces: Vec<Interface>, 
-        interface_reps: HashMap<String, InterfaceRep>, 
+        interfaces: Vec<Interface>,
+        interface_reps: HashMap<String, InterfaceRep>,
         forwarding_table: HashMap<Ipv4Net, Route>,
     ) -> Node {
         Node {
@@ -43,52 +43,79 @@ impl Node {
         for interface in interfaces {
             thread::spawn(move || interface.run());
         }
-        
+        println!("Interfaces spawned");
+
         //ONGOING TASKS
         //Define mutex to protect self - although each tokio "thread" runs asynchronously instead of concurrently, mutexes are still needed (despite what I originally thought)
         let self_mutex1 = Arc::new(Mutex::new(self));
         let self_mutex2 = Arc::clone(&self_mutex1);
+        println!("Mutexes spawned");
+
         //Listen for REPL prompts from REPL thread and handle them
         let mut repl_listen = tokio::spawn(async move {
-            loop {
+            println!("Listening for REPL");
+            // loop {
                 let chan_res = recv_rchan.recv().await;
                 let mut slf = self_mutex1.lock().await;
                 match chan_res {
-                    Some(CmdType::Li) => slf.li(),
-                    Some(CmdType::Ln) => slf.ln(),
-                    Some(CmdType::Lr) => slf.lr(),
-                    Some(CmdType::Up(inter)) => slf.up(inter).await,
-                    Some(CmdType::Down(inter)) => slf.down(inter).await,
-                    Some(CmdType::Send(addr, msg)) => slf.send(addr, msg).await,
-                    None => panic!("Channel to REPL disconnected :(")
+                    Some(CmdType::Li) => {
+                        slf.li();
+                        println!("Send li command")
+                    }
+                    Some(CmdType::Ln) => {
+                        slf.ln();
+                        println!("Send ln command")
+                    }
+                    Some(CmdType::Lr) => {
+                        slf.lr();
+                        println!("Send lr command")
+                    }
+                    Some(CmdType::Up(inter)) => {
+                        slf.up(inter).await;
+                        println!("Send up command")
+                    }
+                    Some(CmdType::Down(inter)) => {
+                        slf.down(inter).await;
+                        println!("Send down command")
+                    }
+                    Some(CmdType::Send(addr, msg)) => {
+                        slf.send(addr, msg).await;
+                        println!("Send message")
+                    }
+                    None => panic!("Channel to REPL disconnected :("),
                 }
-            }
+                tokio::task::yield_now().await;
+            // }
         });
         //Listen for messages from interfaces and handle them
         let mut interface_listen = tokio::spawn(async move {
-            loop {
+            println!("Listening for interfaces");
+            // loop {
                 let mut packets = Vec::new();
                 let mut slf = self_mutex2.lock().await;
                 for inter_rep in slf.interface_reps.values_mut() {
                     let chan = &mut inter_rep.chan;
-                    println!("chan: {:?}", chan);
                     match chan.recv.try_recv() {
                         Ok(pack) => packets.push(pack), //Can't call slf.forward_packet(pack) directly here for ownership reasons
-                        Err(TryRecvError::Empty) => {},
-                        Err(TryRecvError::Disconnected) => panic!("Channel disconnected for some reason")
-                    } 
+                        Err(TryRecvError::Empty) => { println!("Received nothing") }
+                        Err(TryRecvError::Disconnected) => {
+                            panic!("Channel disconnected for some reason")
+                        }
+                    }
                 }
                 for pack in packets {
-                    slf.forward_packet(pack).await.expect("Error forwarding packet");
+                    slf.forward_packet(pack)
+                        .await
+                        .expect("Error forwarding packet");
                 }
                 tokio::task::yield_now().await; //Make sure listening for messages from interfaces doesn't hog all the time
-            }
+            // }
         });
         //Select whether to listen for stuff from the REPL or to listen for interface messages
         loop {
             tokio::select! {
-                _ = &mut repl_listen => {},
-                _ = &mut interface_listen => {}
+                _ = &mut repl_listen => { },
+                _ = &mut interface_listen => { }
             }
         }
     }
@@ -97,16 +124,25 @@ impl Node {
         for inter_rep in self.interface_reps.values() {
             let status = match inter_rep.status {
                 InterfaceStatus::Up => "up",
-                InterfaceStatus::Down => "down"
+                InterfaceStatus::Down => "down",
             };
-            println!("{}\t{}/{}\t{}", inter_rep.name, inter_rep.v_net.addr(), inter_rep.v_net.prefix_len(), status)
+            println!(
+                "{}\t{}/{}\t{}",
+                inter_rep.name,
+                inter_rep.v_net.addr(),
+                inter_rep.v_net.prefix_len(),
+                status
+            )
         }
     }
     fn ln(&self) -> () {
         println!("Iface\tVIP\t\tUDPAddr");
         for inter_rep in self.interface_reps.values() {
             for neighbor in &inter_rep.neighbors {
-                println!("{}\t{}\t127.0.0.1:{}", inter_rep.name, neighbor.0, neighbor.1);
+                println!(
+                    "{}\t{}\t127.0.0.1:{}",
+                    inter_rep.name, neighbor.0, neighbor.1
+                );
             }
         }
     }
@@ -114,32 +150,39 @@ impl Node {
         println!("T\tPrefix\t\tNext hop\tCost");
         for (v_net, route) in &self.forwarding_table {
             let cost = match &route.cost {
-                Some(num) => num.to_string(), 
-                None => String::from("-")
+                Some(num) => num.to_string(),
+                None => String::from("-"),
             };
             let next_hop = match &route.next_hop {
                 ForwardingOption::Ip(ip) => ip.to_string(),
-                ForwardingOption::Inter(inter) => "LOCAL:".to_string() + inter, 
-                ForwardingOption::ToSelf => continue //Skip because don't print routes to self
+                ForwardingOption::Inter(inter) => "LOCAL:".to_string() + inter,
+                ForwardingOption::ToSelf => continue, //Skip because don't print routes to self
             };
-            let r_type = 
-
-
-    match route.rtype {
+            let r_type = match route.rtype {
                 RouteType::Rip => "R",
                 RouteType::Local => "L",
                 RouteType::Static => "S",
                 RouteType::ToSelf => continue, //Should never get here
             };
-            println!("{}\t{}/{}\t{}\t{}", r_type, v_net.addr(), v_net.prefix_len(), next_hop, cost)
-        } 
+            println!(
+                "{}\t{}/{}\t{}\t{}",
+                r_type,
+                v_net.addr(),
+                v_net.prefix_len(),
+                next_hop,
+                cost
+            )
+        }
     }
     async fn up(&mut self, inter: String) -> () {
         let inter_rep = self.interface_reps.get_mut(&inter).unwrap();
         match inter_rep.status {
-            InterfaceStatus::Up => {}, //Don't do anything if already up
+            InterfaceStatus::Up => {} //Don't do anything if already up
             InterfaceStatus::Down => {
-                inter_rep.command(InterCmd::ToggleStatus).await.expect("Error connecting to interface");
+                inter_rep
+                    .command(InterCmd::ToggleStatus)
+                    .await
+                    .expect("Error connecting to interface");
                 inter_rep.status = InterfaceStatus::Up;
             }
         }
@@ -148,9 +191,12 @@ impl Node {
         let inter_rep = self.interface_reps.get_mut(&inter).unwrap();
         match inter_rep.status {
             InterfaceStatus::Up => {
-                inter_rep.command(InterCmd::ToggleStatus).await.expect("Error connecting to interface");
+                inter_rep
+                    .command(InterCmd::ToggleStatus)
+                    .await
+                    .expect("Error connecting to interface");
                 inter_rep.status = InterfaceStatus::Down;
-            },
+            }
             InterfaceStatus::Down => {} //Don't do anything if already down
         }
     }
@@ -158,27 +204,40 @@ impl Node {
         let ip_addr = addr.as_str().parse().expect("Invalid ip address"); //FIX THIS LATER
         let pb = PacketBasis {
             dst_ip: ip_addr,
-            msg
+            msg,
         };
         let (inter_rep, next_hop) = match self.proper_interface(&ip_addr) {
-            Some((name, next_hop)) => (self.interface_reps.get_mut(&name.clone()).unwrap(), next_hop),
-            None => panic!("Packet sent to self") //FIX THIS LATER
+            Some((name, next_hop)) => (
+                self.interface_reps.get_mut(&name.clone()).unwrap(),
+                next_hop,
+            ),
+            None => panic!("Packet sent to self"), //FIX THIS LATER
         };
-        inter_rep.command(InterCmd::BuildSend(pb, next_hop)).await.expect("Error sending connecting to interface or sending packet"); //COULD BE MORE ROBUST
+        inter_rep
+            .command(InterCmd::BuildSend(pb, next_hop))
+            .await
+            .expect("Error sending connecting to interface or sending packet"); //COULD BE MORE ROBUST
     }
-    async fn forward_packet(&mut self, pack: Packet) -> std::result::Result<(), SendError<InterCmd>> { //Made it async cause it'll give some efficiency gains with sending through the channel (I think)
+    async fn forward_packet(
+        &mut self,
+        pack: Packet,
+    ) -> std::result::Result<(), SendError<InterCmd>> {
+        //Made it async cause it'll give some efficiency gains with sending through the channel (I think)
         //Run it through check_packet to see if it should be dropped
-        if !Node::packet_valid(pack.clone()) {return Ok(())};
-        let pack = Node::update_pack(pack);
-        let pack_header = pack.clone().header; 
-        //Get the proper interface's name
-        let (inter_rep_name, next_hop) = match self.proper_interface(&Ipv4Addr::from(pack_header.destination)) {
-            Some((name, next_hop)) => (name, next_hop),
-            None => {
-                self.process_packet(pack);
-                return Ok(());
-            }
+        if !Node::packet_valid(pack.clone()) {
+            return Ok(());
         };
+        let pack = Node::update_pack(pack);
+        let pack_header = pack.clone().header;
+        //Get the proper interface's name
+        let (inter_rep_name, next_hop) =
+            match self.proper_interface(&Ipv4Addr::from(pack_header.destination)) {
+                Some((name, next_hop)) => (name, next_hop),
+                None => {
+                    self.process_packet(pack);
+                    return Ok(());
+                }
+            };
         //Find the proper interface and hand the packet off to it
         let inter_rep_name = inter_rep_name.clone(); //Why? To get around stinkin Rust borrow checker. Get rid of this line (and the borrow on the next) to see why. Ugh
         let inter_rep = self.interface_reps.get_mut(&inter_rep_name).unwrap();
@@ -186,16 +245,18 @@ impl Node {
     }
     fn proper_interface(&self, dst_addr: &Ipv4Addr) -> Option<(&String, Ipv4Addr)> {
         let mut dst_ip = dst_addr;
-        loop { //Loop until bottom out at a route that sends to an interface
+        loop {
+            //Loop until bottom out at a route that sends to an interface
             //Run it through longest prefix
-            let netmask = Node::longest_prefix(self.forwarding_table.keys().collect(), dst_ip).expect("Couldn't find matching prefix for {netmask:?}");
+            let netmask = Node::longest_prefix(self.forwarding_table.keys().collect(), dst_ip)
+                .expect("Couldn't find matching prefix for {netmask:?}");
             //See what the value tied to that prefix is
             let route = self.forwarding_table.get(&netmask).unwrap();
             //If it's an Ip address, repeat with that IP address, an interface, forward via channel to that interface, if it is a ToSelf, handle internally
             dst_ip = match &route.next_hop {
                 ForwardingOption::Inter(name) => break Some((name, dst_ip.clone())),
                 ForwardingOption::Ip(ip) => ip,
-                ForwardingOption::ToSelf => break None
+                ForwardingOption::ToSelf => break None,
             };
         }
     }
@@ -207,7 +268,7 @@ impl Node {
         let ttl = pack_head.time_to_live;
         if ttl == 0 {
             return false;
-        } 
+        }
 
         // Obtain checksum, check if correct calculation
         let checksum = pack_head.header_checksum;
@@ -227,11 +288,14 @@ impl Node {
         pack_head.header_checksum = pack_head.calc_header_checksum();
 
         // Rebuild packet
-        let updated_pack: Packet = Packet { header: pack_head, data: pack.data };
+        let updated_pack: Packet = Packet {
+            header: pack_head,
+            data: pack.data,
+        };
         return updated_pack;
     }
 
-    /// There's a way to do this with a trie, but I'm unsure if I... want to. 
+    /// There's a way to do this with a trie, but I'm unsure if I... want to.
     fn longest_prefix(masks: Vec<&Ipv4Net>, addr: &Ipv4Addr) -> Result<Ipv4Net> {
         // Put the thing in
 
@@ -248,8 +312,8 @@ impl Node {
             Ok(search_res) => {
                 let address: Ipv4Addr = search_res.parse().expect("fuck");
                 return Ok(Ipv4Net::from(address));
-            },
-            Err(e) => Err(e)
+            }
+            Err(e) => Err(e),
         }
     }
     fn process_packet(&self, pack: Packet) -> () {
@@ -257,19 +321,21 @@ impl Node {
         let dst = String::from_utf8(Vec::from(pack.header.destination)).unwrap();
         let ttl = pack.header.time_to_live;
         let msg = String::from_utf8(pack.data).unwrap();
-        let retstr = format!("Received tst packet: Src: {}, Dst: {}, TTL: {}, {}", src, dst, ttl, msg);
+        let retstr = format!(
+            "Received tst packet: Src: {}, Dst: {}, TTL: {}, {}",
+            src, dst, ttl, msg
+        );
         println!("{}", retstr);
         // Logic for editing fwd table
     }
-    
 }
 
-#[derive (Debug)]
+#[derive(Debug)]
 pub enum CmdType {
     Li,
     Ln,
     Lr,
     Up(String),
     Down(String),
-    Send(String, String)
+    Send(String, String),
 }
