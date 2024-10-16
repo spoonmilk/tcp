@@ -17,3 +17,4 @@ mod prelude;
 mod utils;
 pub mod config;
 pub mod ip_data_types;
+pub mod rip_utils;

@@ -17,6 +17,8 @@ pub struct Node {
     interfaces: Vec<Interface>, //Is depleted upon startup when all interface threads are spawned - use interface_reps to find information about each interface
     interface_reps: HashMap<String, InterfaceRep>, //Maps an interface's name to its associated InterfaceRep
     forwarding_table: HashMap<Ipv4Net, Route>,
+    // RIP neighbors vec
+    // Timeout table(?)
 }
 
 impl Node {
@@ -69,6 +71,7 @@ impl Node {
                 let mut slf = self_mutex2.lock().await;
                 for inter_rep in slf.interface_reps.values_mut() {
                     let chan = &mut inter_rep.chan;
+                    println!("chan: {:?}", chan);
                     match chan.recv.try_recv() {
                         Ok(pack) => packets.push(pack), //Can't call slf.forward_packet(pack) directly here for ownership reasons
                         Err(TryRecvError::Empty) => {},
@@ -166,6 +169,7 @@ impl Node {
     async fn forward_packet(&mut self, pack: Packet) -> std::result::Result<(), SendError<InterCmd>> { //Made it async cause it'll give some efficiency gains with sending through the channel (I think)
         //Run it through check_packet to see if it should be dropped
         if !Node::packet_valid(pack.clone()) {return Ok(())};
+        let pack = Node::update_pack(pack);
         let pack_header = pack.clone().header; 
         //Get the proper interface's name
         let (inter_rep_name, next_hop) = match self.proper_interface(&Ipv4Addr::from(pack_header.destination)) {
@@ -255,6 +259,7 @@ impl Node {
         let msg = String::from_utf8(pack.data).unwrap();
         let retstr = format!("Received tst packet: Src: {}, Dst: {}, TTL: {}, {}", src, dst, ttl, msg);
         println!("{}", retstr);
+        // Logic for editing fwd table
     }
     
 }

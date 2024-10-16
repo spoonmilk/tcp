@@ -8,7 +8,7 @@ import argparse
 import subprocess
 
 import ipaddress
-from ipaddress import IPv4Address, Ipv4Net
+from ipaddress import IPv4Address, IPv4Network
 
 import dataclasses
 from dataclasses import dataclass
@@ -74,7 +74,7 @@ class IPAllocator():
 
     IP_PREFIX_HEAD = 0
 
-    def __init__(self, prefix: Ipv4Net):
+    def __init__(self, prefix: IPv4Network):
         self.prefix = prefix
         self.hosts = self.prefix.hosts()  # Generator
 
@@ -87,7 +87,7 @@ class IPAllocator():
 
     @classmethod
     def _next_prefix(cls):
-        prefix = Ipv4Net(NETWORK_PREFIX_FMT.format(cls.IP_PREFIX_HEAD))
+        prefix = IPv4Network(NETWORK_PREFIX_FMT.format(cls.IP_PREFIX_HEAD))
         cls.IP_PREFIX_HEAD += 1
         return prefix
 
@@ -103,7 +103,7 @@ class Interface():
     network: 'Network'
     udp_addr: str = ""
 
-    def prefix(self) -> Ipv4Net:
+    def prefix(self) -> IPv4Network:
         return self.network.alloc.prefix
 
     def ip_cidr_format(self):
@@ -320,7 +320,7 @@ class NetConfig():
                 network = Network(name=_get(net, "name"),
                                   links=links,
                                   advertise_from=advertise_from,
-                                  alloc=IPAllocator(Ipv4Net(_get(net, "prefix"), strict=False)))
+                                  alloc=IPAllocator(IPv4Network(_get(net, "prefix"), strict=False)))
             else:
                 network = Network(name=_get(net, "name"),
                                   links=links,

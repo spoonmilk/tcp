@@ -5,6 +5,7 @@ use lnxparser::IPConfig;
 use library::config::initialize;
 use library::ip_data_types::CHANNEL_CAPACITY;
 mod repl;
+mod async_repl;
 //use library::ip_data_types::{Node, NodeType};
 
 fn main() {
@@ -17,7 +18,7 @@ fn main() {
     let file_path = (&args[2]).clone();
     //Initialize the node
     let config_info: IPConfig = IPConfig::new(file_path);
-    let mut nd = match initialize(config_info) {
+    let nd = match initialize(config_info) {
         Ok(nd) => nd,
         Err(e) => panic!("Error initializing node: {e:?}")
     };
@@ -26,5 +27,5 @@ fn main() {
     let (send, recv) = channel(CHANNEL_CAPACITY);
     spawn(move || nd.run(recv));
     //Run REPL
-    repl::run_repl(nd_type, send);
+    let _ = async_repl::run_repl(nd_type, send);
 }

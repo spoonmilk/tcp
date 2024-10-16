@@ -1,7 +1,7 @@
 ROOT_DIR := $(shell pwd)
 
-LIBRARY_DIR := ip-the-better-tech-house-group/ip-imp/library
-VNODE_DIR := ip-the-better-tech-house-group/ip-imp/vnode
+LIBRARY_DIR := ./ip-imp/library
+VNODE_DIR := ./ip-imp/vnode
 
 VHOST_OUT := $(ROOT_DIR)/vhost
 VROUTER_OUT := $(ROOT_DIR)/vrouter
@@ -9,17 +9,16 @@ VROUTER_OUT := $(ROOT_DIR)/vrouter
 debug: build_debug
 
 build_debug:
-	cargo build --manifest-path ./ip-imp/cargo.toml
-	cp vnode/target/debug/vnode $(VHOST_OUT)
-	cp vnode/target/debug/vnode vrouter $(VROUTER_OUT)
+	cargo build --manifest-path $(ROOT_DIR)/ip-imp/Cargo.toml
+	cp $(ROOT_DIR)/ip-imp/target/debug/vnode $(VHOST_OUT)
+	cp $(ROOT_DIR)/ip-imp/target/debug/vnode $(VROUTER_OUT)
 
 build:
-	cargo build --manifest-path ./ip-imp/cargo.toml --release
-	cp vnode/target/release/vnode $(VHOST_OUT)
-	cp vnode/target/release/vnode vrouter $(VROUTER_OUT)		
+	cargo build --manifest-path $(ROOT_DIR)/ip-imp/Cargo.toml --release
+	cp $(ROOT_DIR)/ip-imp/target/release/vnode $(VHOST_OUT)
+	cp $(ROOT_DIR)/ip-imp/target/release/vnode $(VROUTER_OUT)		
 
 clean:
-	cargo clean --manifest-path vnode/Cargo.toml
-	cargo clean --manifest-path vnode/Cargo.toml
-	rm ./vnode
-	rm ./vrouter
+	cargo clean --manifest-path $(VNODE_DIR)/Cargo.toml
+	rm $(ROOT_DIR)/vnode
+	rm $(ROOT_DIR)/vrouter
