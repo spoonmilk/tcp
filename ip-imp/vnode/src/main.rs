@@ -19,7 +19,9 @@ fn main() {
     //Initialize the node
     let config_info: IPConfig = IPConfig::new(file_path);
     let nd = match initialize(config_info) {
-        Ok(nd) => nd,
+        Ok(nd) => { 
+            println!("Successfully initialized node with interfaces: {:?}", nd.interface_reps); 
+            nd }
         Err(e) => panic!("Error initializing node: {e:?}")
     };
     //Create a channel and run the node

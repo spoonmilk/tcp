@@ -15,9 +15,9 @@ pub struct RipRoute {
 
 // Methods we need 
 
-// Thread in nodes that sends out advertisements 
+// Thread in nodes that sends outAdvertisement 
 // Update process_packets to deal with RIP packets
-    // Create sub function for process_packets to handle timeout
+    // Add method to handle RIP timeouts
 // Method that edits forwarding table of nodes
 // Constructing RIP packets
 

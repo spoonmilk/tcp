@@ -99,6 +99,7 @@ pub fn initialize(config_info: IPConfig) -> Result<Node> {
             route_map.insert(self_addr, Route::new(RouteType::ToSelf, None, ForwardingOption::ToSelf)); //Route is toSelf, so cost is None
             // Add the sole interface to the interfaces vector and return
             interfaces.push(interface);
+            println!("Interfaces: {:?}", interfaces);
             (NodeType::Host, route_map)
         }
         RoutingType::Static => {
@@ -136,7 +137,38 @@ pub fn initialize(config_info: IPConfig) -> Result<Node> {
         }
         RoutingType::Rip => {
             // Node is an evil router
-            eprintln!("RIP routing not yet implemented"); 
+            eprintln!("RIP routing not yet implemented");
+            //For now just do it without RIP
+            let mut route_map = HashMap::new();
+            // Initializing routes in forwarding table
+            for route in config_info.static_routes {
+                let keys: Vec<_> = interface_reps_map.keys().cloned().collect(); //Keys could be different on each iteration, so needs to be formulated here
+                for key in &keys {
+                    let mut flag = false;
+                    let (interface, _) = interface_reps_map.get(key).unwrap();
+                    for neighbor in &interface.neighbors {
+                        if route.0.contains(neighbor.0) {
+                            let (interface, interface_rep) = interface_reps_map.remove(key).unwrap();
+                            route_map.insert(
+                                route.0,
+                                Route::new(RouteType::Local, Some(0), ForwardingOption::Inter((&interface_rep).name.clone())) //Route is local because it is a route to a connected interface, so cost is 0
+                            );
+                            interface_reps.insert((&interface_rep).name.clone(), interface_rep);
+                            interfaces.push(interface);
+                            flag = true;
+                            break
+                        }
+                    }
+                    if flag { break }
+                }
+            }
+            //interface_reps_map is DEPLETED by this point - interfaces is now GROWN
+            // Creates self route for forwarding
+            for interface in &interfaces {
+                let self_addr = Ipv4Net::new(interface.v_ip, 32).unwrap();
+                route_map.insert(self_addr, Route::new(RouteType::ToSelf, None, ForwardingOption::ToSelf)); //Route is toSelf, so cost is None
+            }
+            (NodeType::Router, route_map)
         }
     };
     let node = Node::new(n_type, interfaces, interface_reps, forwarding_table);

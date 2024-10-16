@@ -15,7 +15,7 @@ pub enum NodeType {
 pub struct Node {
     pub n_type: NodeType,
     interfaces: Vec<Interface>, //Is depleted upon startup when all interface threads are spawned - use interface_reps to find information about each interface
-    interface_reps: HashMap<String, InterfaceRep>, //Maps an interface's name to its associated InterfaceRep
+    pub interface_reps: HashMap<String, InterfaceRep>, //Maps an interface's name to its associated InterfaceRep
     forwarding_table: HashMap<Ipv4Net, Route>,
     // RIP neighbors vec
     // Timeout table(?)
@@ -35,11 +35,14 @@ impl Node {
             forwarding_table,
         }
     }
+
+    /// Runs the node and spawns interfaces
     #[tokio::main]
     pub async fn run(mut self, mut recv_rchan: Receiver<CmdType>) -> () {
         //STARTUP TASKS
         //Spawn all interfaces - interfaces is DEPLETED after this and unusable
         let interfaces = mem::take(&mut self.interfaces);
+        println!("Spawning {} interfaces", interfaces.len());
         for interface in interfaces {
             thread::spawn(move || interface.run());
         }
@@ -54,8 +57,9 @@ impl Node {
         //Listen for REPL prompts from REPL thread and handle them
         let mut repl_listen = tokio::spawn(async move {
             println!("Listening for REPL");
-            // loop {
+                println!("Waiting for REPL command");
                 let chan_res = recv_rchan.recv().await;
+                println!("REPL command received");
                 let mut slf = self_mutex1.lock().await;
                 match chan_res {
                     Some(CmdType::Li) => {
@@ -71,26 +75,28 @@ impl Node {
                         println!("Send lr command")
                     }
                     Some(CmdType::Up(inter)) => {
+                        println!("Sending up command");
                         slf.up(inter).await;
-                        println!("Send up command")
+                        println!("Up command sent")
                     }
                     Some(CmdType::Down(inter)) => {
+                        println!("Sending down command");
                         slf.down(inter).await;
-                        println!("Send down command")
+                        println!("Down command sent")
                     }
                     Some(CmdType::Send(addr, msg)) => {
+                        println!("Sending message");
                         slf.send(addr, msg).await;
-                        println!("Send message")
+                        println!("Message sent")
                     }
                     None => panic!("Channel to REPL disconnected :("),
                 }
-                tokio::task::yield_now().await;
-            // }
+                println!("REPL command handled");
         });
         //Listen for messages from interfaces and handle them
         let mut interface_listen = tokio::spawn(async move {
             println!("Listening for interfaces");
-            // loop {
+                println!("Waiting for messages from interfaces");
                 let mut packets = Vec::new();
                 let mut slf = self_mutex2.lock().await;
                 for inter_rep in slf.interface_reps.values_mut() {
@@ -103,19 +109,24 @@ impl Node {
                         }
                     }
                 }
+                println!("Received {} packets from interfaces", packets.len());
                 for pack in packets {
+                    println!("Forwarding packet");
                     slf.forward_packet(pack)
                         .await
                         .expect("Error forwarding packet");
                 }
-                tokio::task::yield_now().await; //Make sure listening for messages from interfaces doesn't hog all the time
-            // }
+                println!("Packets forwarded");
         });
         //Select whether to listen for stuff from the REPL or to listen for interface messages
         loop {
             tokio::select! {
-                _ = &mut repl_listen => { },
-                _ = &mut interface_listen => { }
+                _ = &mut repl_listen => { 
+                    println!("Repl listener task completed");
+                },
+                _ = &mut interface_listen => { 
+                    println!("Interface listener task completed");
+                }
             }
         }
     }
