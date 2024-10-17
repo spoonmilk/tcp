@@ -1,5 +1,6 @@
 use crate::{prelude::*, rip_utils::RipMsg};
 use std::io::{Error, ErrorKind};
+use tokio::net::UdpSocket;
 
 /*
 INCREDIBLY CONFUSING CHART OF FWDING TABLE STRUCTURE INTENDED TO MAKE SAID STRUCTURE LESS CONFUSING
@@ -200,7 +201,7 @@ impl Interface {
         header.header_checksum = header.calc_header_checksum();
         return Packet { header, data: payload } // Packet built!
     }
-    pub async fn send(&mut self, pack: Packet, next_hop: Ipv4Addr) -> Result<()> {
+    pub async fn send(&mut self, pack: Packet, next_hop: Ipv4Addr) -> std::io::Result<()> {
         // Grab neighbor address to send to
         let dst_neighbor = self.neighbors.get(&next_hop).unwrap();
         // Self address for binding
@@ -216,11 +217,11 @@ impl Interface {
     }
     pub async fn recv(&mut self) -> Result<Packet> {
         let mut received = false;
-        match UdpSocket::bind(format!("127.0.0.1:{}", self.udp_port)) {
+        match UdpSocket::bind(format!("127.0.0.1:{}", self.udp_port)).await {
             Ok(socket) => {
                 let mut buf:[u8; 40] = [0; 40];
                 while !received {
-                    let len = socket.recv(&mut buf)?; // Break if receive
+                    let len = socket.recv(&mut buf).await?; // Break if receive
                     if len != 0 {
                         received = !received;
                     }
