@@ -5,6 +5,6 @@ pub use std::result;
 pub use std::sync::Arc;
 pub use tokio::{self, sync::{Mutex, mpsc::{self, channel, Sender, Receiver, error::TryRecvError, error::SendError}}};
 pub use etherparse::{Ipv4Header, IpNumber};
-pub use lnxparser::{IPConfig, InterfaceConfig, NeighborConfig, RoutingType};
+pub use lnxparser::{IPConfig, InterfaceConfig, NeighborConfig, RoutingType, StaticRoute};
 pub use ipnet::Ipv4Net;
 //pub use prettyprint::PrettyPrint;
