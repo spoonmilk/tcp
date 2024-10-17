@@ -1,5 +1,6 @@
 use crate::prelude::*;
 use crate::utils::*;
+use crate::rip_utils::*;
 use std::mem;
 use std::thread;
 
@@ -15,8 +16,9 @@ pub enum NodeType {
 pub struct Node {
     pub n_type: NodeType,
     interfaces: Vec<Interface>, //Is depleted upon startup when all interface threads are spawned - use interface_reps to find information about each interface
-    pub interface_reps: HashMap<String, InterfaceRep>, //Maps an interface's name to its associated InterfaceRep
+    interface_reps: HashMap<String, InterfaceRep>, //Maps an interface's name to its associated InterfaceRep
     forwarding_table: HashMap<Ipv4Net, Route>,
+    rip_neighbors: HashMap<Ipv4Net, RipRoute>,
     // RIP neighbors vec
     // Timeout table(?)
 }
@@ -27,12 +29,14 @@ impl Node {
         interfaces: Vec<Interface>,
         interface_reps: HashMap<String, InterfaceRep>,
         forwarding_table: HashMap<Ipv4Net, Route>,
+        rip_neighbors: HashMap<Ipv4Net, RipRoute>,
     ) -> Node {
         Node {
             n_type,
             interfaces,
             interface_reps,
             forwarding_table,
+            rip_neighbors
         }
     }
 
@@ -57,6 +61,7 @@ impl Node {
         //Listen for REPL prompts from REPL thread and handle them
         let mut repl_listen = tokio::spawn(async move {
             println!("Listening for REPL");
+            loop {
                 println!("Waiting for REPL command");
                 let chan_res = recv_rchan.recv().await;
                 println!("REPL command received");
@@ -92,10 +97,13 @@ impl Node {
                     None => panic!("Channel to REPL disconnected :("),
                 }
                 println!("REPL command handled");
+                tokio::task::yield_now().await
+            }
         });
         //Listen for messages from interfaces and handle them
         let mut interface_listen = tokio::spawn(async move {
             println!("Listening for interfaces");
+            loop {
                 println!("Waiting for messages from interfaces");
                 let mut packets = Vec::new();
                 let mut slf = self_mutex2.lock().await;
@@ -103,7 +111,7 @@ impl Node {
                     let chan = &mut inter_rep.chan;
                     match chan.recv.try_recv() {
                         Ok(pack) => packets.push(pack), //Can't call slf.forward_packet(pack) directly here for ownership reasons
-                        Err(TryRecvError::Empty) => { println!("Received nothing") }
+                        Err(TryRecvError::Empty) => { }
                         Err(TryRecvError::Disconnected) => {
                             panic!("Channel disconnected for some reason")
                         }
@@ -116,7 +124,8 @@ impl Node {
                         .await
                         .expect("Error forwarding packet");
                 }
-                println!("Packets forwarded");
+                tokio::task::yield_now().await
+            }
         });
         //Select whether to listen for stuff from the REPL or to listen for interface messages
         loop {

@@ -1,4 +1,4 @@
-use crate::prelude::*;
+use crate::{prelude::*, rip_utils::RipMsg};
 use std::io::{Error, ErrorKind};
 
 /*
@@ -15,12 +15,12 @@ Key: Ipv4Net, Val: Route(RouteType, Cost: Option<i32>, ForwardingOption)
 #[derive(Debug)]
 pub struct Route {
     pub rtype: RouteType,           //Indicates how route was learned
-    pub cost: Option<i32>, //Indicates cost of route (how many hops - important for lr REPL command) - cost can be unknown (for default route), hence the Option
+    pub cost: Option<u32>, //Indicates cost of route (how many hops - important for lr REPL command) - cost can be unknown (for default route), hence the Option
     pub next_hop: ForwardingOption, //Contains all information needed to proceed with the routing process
 }
 
 impl Route {
-    pub fn new(rtype: RouteType, cost: Option<i32>, next_hop: ForwardingOption) -> Route {
+    pub fn new(rtype: RouteType, cost: Option<u32>, next_hop: ForwardingOption) -> Route {
         Route {
             rtype,
             cost,
@@ -206,16 +206,12 @@ impl Interface {
         // Self address for binding
         let bind_addr = format!("127.0.0.1:{}", self.udp_port);
         // Bind to Udp port and attempt to send to neighbor
-        match UdpSocket::bind(bind_addr) {
-            Ok(socket) => {
-                match socket.send_to(&pack.data, format!("127.0.0.1:{}", dst_neighbor)) {
-                    // TODO: Do something on Ok? Make error more descriptive?
-                    Ok(_) => Ok(()),
-                    Err(e) => Err(e)
-                }
-            }
-            // TODO: Less shitty error
-            Err(e) => Err(e)
+        let sock = UdpSocket::bind(bind_addr).await?;
+
+        match sock.send_to(&pack.data, format!("127.0.0.1:{}", dst_neighbor)).await {
+            // TODO: Do something on Ok? Make error more descriptive?
+            Ok(_) => Ok(()),
+            Err(e) => Err(e),
         }
     }
     pub async fn recv(&mut self) -> Result<Packet> {

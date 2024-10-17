@@ -94,6 +94,7 @@ pub fn initialize(config_info: IPConfig) -> Result<Node> {
                 Ipv4Net::new(Ipv4Addr::from(0), 0).unwrap(),
                 Route::new(RouteType::Static, None, ForwardingOption::Ip((&interface).v_ip)), //Default route, so static and has no cost
             );
+            println!("Routemap has size: {}", route_map.len());
             // For self ; consume packet
             let self_addr = Ipv4Net::new((&interface).v_ip, 32).unwrap();
             route_map.insert(self_addr, Route::new(RouteType::ToSelf, None, ForwardingOption::ToSelf)); //Route is toSelf, so cost is None
@@ -174,3 +175,4 @@ pub fn initialize(config_info: IPConfig) -> Result<Node> {
     let node = Node::new(n_type, interfaces, interface_reps, forwarding_table);
     Ok(node)
 }
+
