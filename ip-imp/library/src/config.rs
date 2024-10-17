@@ -172,7 +172,8 @@ pub fn initialize(config_info: IPConfig) -> Result<Node> {
             (NodeType::Router, route_map)
         }
     };
-    let node = Node::new(n_type, interfaces, interface_reps, forwarding_table);
+    // TODO: REPLACE THIS WITH NEW RIP NEIGHBORS THING
+    let node = Node::new(n_type, interfaces, interface_reps, forwarding_table, HashMap::new());
     Ok(node)
 }
 

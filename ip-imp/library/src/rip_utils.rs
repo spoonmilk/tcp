@@ -87,4 +87,3 @@ pub fn form_rip_update(rip_table: &mut HashMap<Ipv4Net, RipRoute>) -> RipMsg {
     }
     RipMsg::new(2, routes.len() as u16, routes)
 }
-
