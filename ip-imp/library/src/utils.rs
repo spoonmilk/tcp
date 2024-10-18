@@ -180,6 +180,11 @@ impl Interface {
         }
     }
     fn build(&mut self, pb: PacketBasis) -> Packet {
+        // TODO: ADD BUILDING RIP PACKETS   
+
+
+
+
         // Grabbing info from sending interface for header
         let src_ip = self.v_ip;
         let dst_ip = pb.dst_ip;

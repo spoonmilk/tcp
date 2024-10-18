@@ -1,6 +1,8 @@
 use crate::prelude::*;
 use crate::utils::*;
 
+const INF: u32 = 16;
+
 #[derive(Debug, Clone)]
 pub struct RipMsg {
     command: u16, // 1 for routing request, 2 for response
@@ -37,7 +39,7 @@ impl RipRoute {
 }
 
 pub struct RipPacket {
-    
+
 }
 
 // Methods we need
@@ -51,9 +53,12 @@ pub struct RipPacket {
 // Things we should add
 // New Node field
 
-pub fn table_to_rip(forwarding_table: &mut HashMap<Ipv4Net, Route>, rip_command: u16) -> RipMsg {
+pub fn table_to_rip(forwarding_table: &mut HashMap<Ipv4Net, Route>, rip_command: u16, dst: Ipv4Addr) -> RipMsg {
     let mut routes = Vec::new();
     for (net, route) in forwarding_table {
+        if net.addr() == dst { 
+            routes.push(RipRoute::new(INF, net.network().into(), net.netmask().into()));
+        }
         match route.cost {
             Some(cost) => routes.push(RipRoute::new(cost, net.network().into(), net.netmask().into())),
             None => routes.push(RipRoute::new(0, net.network().into(), net.netmask().into())),

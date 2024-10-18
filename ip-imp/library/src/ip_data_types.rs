@@ -308,7 +308,7 @@ impl Node {
                 self.send(dst.to_string(), String::from_utf8(ser_req_rip).unwrap());
             }
             2 => { // Send a routing response
-                let rip_resp_msg: RipMsg = table_to_rip(fwd_table, 1);
+                let rip_resp_msg: RipMsg = table_to_rip(fwd_table, 1, dst);
                 let ser_resp_rip: Vec<u8> = serialize_rip(rip_resp_msg);
                 self.send(dst.to_string(), String::from_utf8(ser_resp_rip).unwrap());
             }
