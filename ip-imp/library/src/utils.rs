@@ -1,5 +1,5 @@
-use crate::{prelude::*, rip_utils::RipMsg};
-use std::io::{Error, ErrorKind};
+use crate::{ prelude::*, rip_utils::RipMsg };
+use std::io::{ Error, ErrorKind };
 use tokio::net::UdpSocket;
 
 /*
@@ -15,7 +15,7 @@ Key: Ipv4Net, Val: Route(RouteType, Cost: Option<i32>, ForwardingOption)
 //Used as values of the forwarding table hashmap held by nodes
 #[derive(Debug)]
 pub struct Route {
-    pub rtype: RouteType,           //Indicates how route was learned
+    pub rtype: RouteType, //Indicates how route was learned
     pub cost: Option<u32>, //Indicates cost of route (how many hops - important for lr REPL command) - cost can be unknown (for default route), hence the Option
     pub next_hop: ForwardingOption, //Contains all information needed to proceed with the routing process
 }
@@ -33,17 +33,17 @@ impl Route {
 //Used to indicate how a route was learned by the router (important for lr REPL command)
 #[derive(Debug)]
 pub enum RouteType {
-    Rip,    //Learned via RIP
+    Rip, //Learned via RIP
     Static, //Static routes - default route is the only one I can think of under normal circumstances
-    Local,  //Routes to local interfaces - routes with a forwardingOption of Inter
+    Local, //Routes to local interfaces - routes with a forwardingOption of Inter
     ToSelf, //Routes where data is passed directly to the node - are not officially routes (I guess) and do not need to be printed out when lr REPL command is run
 }
 
 #[derive(Debug)]
 pub enum ForwardingOption {
-    Ip(Ipv4Addr),  //Forwarding to an IP address
+    Ip(Ipv4Addr), //Forwarding to an IP address
     Inter(String), // Forwarding to an interface - the String is the name of the interface
-    ToSelf,        // For package destined for current node
+    ToSelf, // For package destined for current node
 }
 
 //Used to hold all the data that a node needs to know about a given interface
@@ -51,7 +51,7 @@ pub enum ForwardingOption {
 pub struct InterfaceRep {
     pub name: String, //Interface name
     pub v_net: Ipv4Net,
-    pub status: InterfaceStatus,         //Interface status
+    pub status: InterfaceStatus, //Interface status
     pub neighbors: Vec<(Ipv4Addr, u16)>, //List of the interface's neighbors in (ipaddr, udpport) form
     pub chan: BiChan<InterCmd, Packet>, //Channel to send and receive messages from associated interface (sends InterCmd and receives Packet)
 }
@@ -61,7 +61,7 @@ impl InterfaceRep {
         name: String,
         v_net: Ipv4Net,
         neighbors: Vec<(Ipv4Addr, u16)>,
-        chan: BiChan<InterCmd, Packet>,
+        chan: BiChan<InterCmd, Packet>
     ) -> InterfaceRep {
         InterfaceRep {
             name,
@@ -71,7 +71,10 @@ impl InterfaceRep {
             chan,
         }
     }
-    pub async fn command(&mut self, cmd: InterCmd) -> result::Result<(), mpsc::error::SendError<InterCmd>> {
+    pub async fn command(
+        &mut self,
+        cmd: InterCmd
+    ) -> result::Result<(), mpsc::error::SendError<InterCmd>> {
         //Sends the input command to the interface
         self.chan.send.send(cmd).await
     }
@@ -88,8 +91,8 @@ pub enum InterfaceStatus {
 #[derive(Debug)]
 pub enum InterCmd {
     BuildSend(PacketBasis, Ipv4Addr), //Build a packet using this PacketBasis and send it - when a send REPL command is used
-    Send(Packet, Ipv4Addr),           //Send this packet - when a packet is being forwarded
-    ToggleStatus,                     //Make status down if up or up if down
+    Send(Packet, Ipv4Addr), //Send this packet - when a packet is being forwarded
+    ToggleStatus, //Make status down if up or up if down
 }
 
 //Used to store the data an interface needs to build a packet and send it
@@ -119,7 +122,7 @@ impl Interface {
         udp_addr: Ipv4Addr,
         udp_port: u16,
         neighbors: HashMap<Ipv4Addr, u16>,
-        chan: BiChan<Packet, InterCmd>,
+        chan: BiChan<Packet, InterCmd>
     ) -> Interface {
         Interface {
             name,
@@ -140,16 +143,17 @@ impl Interface {
         //Listen for commands from the almighty node
         let mut node_listen = tokio::spawn(async move {
             let mut slf1 = self_mutex1.lock().await;
-            loop { 
+            loop {
                 let chan_res = slf1.chan.recv.recv().await;
                 match chan_res {
-                    Some(InterCmd::BuildSend(pb, next_hop)) => { 
+                    Some(InterCmd::BuildSend(pb, next_hop)) => {
                         let builded = slf1.build(pb);
-                        slf1.send(builded, next_hop).await.expect("Error sending packet") 
+                        slf1.send(builded, next_hop).await.expect("Error sending packet");
                     }
-                    Some(InterCmd::Send(pack, next_hop)) => slf1.send(pack, next_hop).await.expect("Error sending packet"),
+                    Some(InterCmd::Send(pack, next_hop)) =>
+                        slf1.send(pack, next_hop).await.expect("Error sending packet"),
                     Some(InterCmd::ToggleStatus) => slf1.toggle_status(),
-                    None => panic!("Channel to almight node disconnected :(")
+                    None => panic!("Channel to almight node disconnected :("),
                 }
             }
         });
@@ -158,11 +162,13 @@ impl Interface {
             let mut slf2 = self_mutex2.lock().await;
             loop {
                 match slf2.status {
-                    InterfaceStatus::Up => { 
+                    InterfaceStatus::Up => {
                         let pack = slf2.recv().await.expect("Error receiving packet");
-                        slf2.pass_packet(pack).await.expect("Channel to almighty node disconnected");
-                    },
-                    InterfaceStatus::Down => tokio::task::yield_now().await //Avoids busy waiting
+                        slf2.pass_packet(pack).await.expect(
+                            "Channel to almighty node disconnected"
+                        );
+                    }
+                    InterfaceStatus::Down => tokio::task::yield_now().await, //Avoids busy waiting
                 }
             }
         });
@@ -177,8 +183,12 @@ impl Interface {
 
     fn toggle_status(&mut self) -> () {
         match self.status {
-            InterfaceStatus::Up => self.status = InterfaceStatus::Down,
-            InterfaceStatus::Down => self.status = InterfaceStatus::Up
+            InterfaceStatus::Up => {
+                self.status = InterfaceStatus::Down;
+            }
+            InterfaceStatus::Down => {
+                self.status = InterfaceStatus::Up;
+            }
         }
     }
     fn build(&mut self, pb: PacketBasis) -> Packet {
@@ -192,14 +202,14 @@ impl Interface {
         let mut header = Ipv4Header {
             source: src_ip.octets(),
             destination: dst_ip.octets(),
-            time_to_live : ttl, 
-            total_len: Ipv4Header::MIN_LEN_U16 + pb.msg.len() as u16,
-            protocol: IpNumber::UDP, 
+            time_to_live: ttl,
+            total_len: Ipv4Header::MIN_LEN_U16 + (pb.msg.len() as u16),
+            protocol: IpNumber::UDP,
             ..Default::default()
         };
         // Checksum
         header.header_checksum = header.calc_header_checksum();
-        return Packet { header, data: payload } // Packet built!
+        return Packet { header, data: payload }; // Packet built!
     }
     pub async fn send(&mut self, pack: Packet, next_hop: Ipv4Addr) -> std::io::Result<()> {
         // Grab neighbor address to send to
@@ -219,7 +229,7 @@ impl Interface {
         let mut received = false;
         match UdpSocket::bind(format!("127.0.0.1:{}", self.udp_port)).await {
             Ok(socket) => {
-                let mut buf:[u8; 40] = [0; 40];
+                let mut buf: [u8; 40] = [0; 40];
                 while !received {
                     let len = socket.recv(&mut buf).await?; // Break if receive
                     if len != 0 {
@@ -228,17 +238,27 @@ impl Interface {
                 }
                 match Ipv4Header::from_slice(&buf) {
                     Ok((head, rest)) => {
-                        let len = (head.total_len - 20) as usize ;
+                        let len = (head.total_len - 20) as usize;
                         let pay: Vec<u8> = Vec::from_iter(rest[0..len].iter().cloned());
-                        return Ok(Packet { header: head, data: pay});
+                        return Ok(Packet { header: head, data: pay });
                     }
-                    Err(_) => return Err(Error::new(ErrorKind::InvalidData, "Failed to read received packet error"))
+                    Err(_) => {
+                        return Err(
+                            Error::new(
+                                ErrorKind::InvalidData,
+                                "Failed to read received packet error"
+                            )
+                        );
+                    }
                 }
             }
-            Err(e) => Err(e)
+            Err(e) => Err(e),
         }
     }
-    async fn pass_packet(&mut self, pack: Packet) -> result::Result<(), mpsc::error::SendError<Packet>> {
+    async fn pass_packet(
+        &mut self,
+        pack: Packet
+    ) -> result::Result<(), mpsc::error::SendError<Packet>> {
         self.chan.send.send(pack).await
     }
 }
@@ -284,12 +304,12 @@ impl TrieNode {
     pub fn search(&mut self, dst: &Ipv4Addr) -> Result<String> {
         let node = self;
         let dst_oct = dst.octets(); // Get destination address octets
-                                    // Keep track of last available route
+        // Keep track of last available route
         let mut last_route: Option<String> = None;
 
         for oct in dst_oct {
             if let Some(next_node) = node.children.get(&oct) {
-                *node = next_node.clone();
+                let node = next_node.clone();
                 if node.is_end {
                     last_route = Some(node.route.clone());
                 }
@@ -301,10 +321,7 @@ impl TrieNode {
         match last_route {
             Some(route) => Ok(route),
             // Error fuckery
-            None => Err(Error::new(
-                ErrorKind::Other,
-                "Could not construct a valid route match",
-            )),
+            None => Err(Error::new(ErrorKind::Other, "Could not construct a valid route match")),
         }
     }
 }

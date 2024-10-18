@@ -2,15 +2,16 @@ use easy_repl::{command, CommandStatus, Repl};
 use easy_repl::anyhow::{self, Context};
 use std::env;
 use library::ip_data_types::{NodeType, CmdType};
-use tokio::sync::mpsc::Sender;
+use std::sync::mpsc::Sender;
 
-pub async fn run_repl(_n_type: NodeType, send_nchan: Sender<CmdType>) -> anyhow::Result<()> {
+pub fn run_repl(_n_type: NodeType, send_nchan: Sender<CmdType>) -> anyhow::Result<()> {
+    let send_nchan_clone = send_nchan.clone();
     let mut repl = Repl::builder()
         .add("li", command! {
             "li: List interfaces",
             () => || {
                 let ls_cmd: CmdType = CmdType::Li;
-                send_cmd(ls_cmd, send_nchan);
+                send_cmd(ls_cmd, send_nchan_clone.clone());
                 Ok(CommandStatus::Done)
             }
         })
@@ -18,7 +19,7 @@ pub async fn run_repl(_n_type: NodeType, send_nchan: Sender<CmdType>) -> anyhow:
             "ln: List neighbors",
             () => || {
                 let ln_cmd: CmdType = CmdType::Ln;
-                send_cmd(ln_cmd, send_nchan);
+                send_cmd(ln_cmd, send_nchan_clone.clone());
                 Ok(CommandStatus::Done)
             }
         })
@@ -26,7 +27,7 @@ pub async fn run_repl(_n_type: NodeType, send_nchan: Sender<CmdType>) -> anyhow:
             "lr: List routes",
             () => || {
                 let lr_cmd: CmdType = CmdType::Lr;
-                send_cmd(lr_cmd, send_nchan);
+                send_cmd(lr_cmd, send_nchan_clone.clone());
                 Ok(CommandStatus::Done)
             }
         })
@@ -34,7 +35,7 @@ pub async fn run_repl(_n_type: NodeType, send_nchan: Sender<CmdType>) -> anyhow:
             "down: disable interface <ifname>",
             (ifname: String) => |ifname| {
                 let down_cmd: CmdType = CmdType::Down(ifname);
-                send_cmd(down_cmd, send_nchan);
+                send_cmd(down_cmd, send_nchan_clone.clone());
                 Ok(CommandStatus::Done)
             }
         })
@@ -42,6 +43,7 @@ pub async fn run_repl(_n_type: NodeType, send_nchan: Sender<CmdType>) -> anyhow:
             "up: enable interface <ifname>",
             (ifname: String) => |ifname| {
                 let up_cmd: CmdType = CmdType::Up(ifname);
+                send_cmd(up_cmd, send_nchan_clone.clone());
                 Ok(CommandStatus::Done)
             }
         })
@@ -58,7 +60,7 @@ pub async fn run_repl(_n_type: NodeType, send_nchan: Sender<CmdType>) -> anyhow:
                     }
                 }
                 let sender_cmd: CmdType = CmdType::Send(addr, retstr);
-                send_cmd(sender_cmd, send_nchan);
+                send_cmd(sender_cmd, send_nchan_clone.clone());
                 // Send packet with message
                 Ok(CommandStatus::Done)
             }

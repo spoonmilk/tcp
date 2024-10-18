@@ -315,15 +315,8 @@ impl Node {
         return updated_pack;
     }
 
-    /// There's a way to do this with a trie, but I'm unsure if I... want to.
+    /// Triesearch go brrr
     fn longest_prefix(masks: Vec<&Ipv4Net>, addr: &Ipv4Addr) -> Result<Ipv4Net> {
-        // Put the thing in
-
-        // // Create a vector of Ipv4Net prefixes/addrs
-        // let pref_vec: Vec<Ipv4Addr> = Vec::new();
-        // let trie_vec: Vec<TrieNode> = Vec::new();
-
-        // For now, linear search
         let mut trie_node = TrieNode::new();
         for mask in masks {
             trie_node.insert(mask.network());

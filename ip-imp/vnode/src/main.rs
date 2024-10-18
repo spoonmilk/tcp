@@ -5,7 +5,6 @@ use lnxparser::IPConfig;
 use library::config::initialize;
 use library::ip_data_types::CHANNEL_CAPACITY;
 mod repl;
-mod async_repl;
 //use library::ip_data_types::{Node, NodeType};
 
 fn main() {
@@ -27,5 +26,5 @@ fn main() {
     let (send, recv) = channel(CHANNEL_CAPACITY);
     spawn(move || nd.run(recv));
     //Run REPL
-    let _ = async_repl::run_repl(nd_type, send);
+    let _ = repl::run_repl(nd_type, send);
 }
