@@ -42,17 +42,14 @@ impl Node {
         //STARTUP TASKS
         //Spawn all interfaces - interfaces is DEPLETED after this and unusable
         let interfaces = mem::take(&mut self.interfaces);
-        println!("Spawning {} interfaces", interfaces.len());
         for interface in interfaces {
             thread::spawn(move || interface.run());
         }
-        println!("Interfaces spawned");
 
         //ONGOING TASKS
         //Define mutex to protect self - although each tokio "thread" runs asynchronously instead of concurrently, mutexes are still needed (despite what I originally thought)
         let self_mutex1 = Arc::new(Mutex::new(self));
         let self_mutex2 = Arc::clone(&self_mutex1);
-        println!("Mutexes spawned");
         //Listen for REPL prompts from REPL thread and handle them
         thread::spawn(move || Node::repl_listen(self_mutex1, recv_rchan));
         //Listen for messages from interfaces and handle them
@@ -60,48 +57,22 @@ impl Node {
     }
     /// Listen for REPL commands to the node
     fn repl_listen(slf_mutex: Arc<Mutex<Node>>, recv_rchan: Receiver<CmdType>) -> () {
-        println!("Listening for REPL");
         loop {
-            println!("Waiting for REPL command");
             let chan_res = recv_rchan.recv();
-            println!("REPL command received");
             let mut slf = slf_mutex.lock().unwrap();
             match chan_res {
-                Ok(CmdType::Li) => {
-                    slf.li();
-                    println!("Send li command")
-                }
-                Ok(CmdType::Ln) => {
-                    slf.ln();
-                    println!("Send ln command")
-                }
-                Ok(CmdType::Lr) => {
-                    slf.lr();
-                    println!("Send lr command")
-                }
-                Ok(CmdType::Up(inter)) => {
-                    println!("Sending up command");
-                    slf.up(inter);
-                    println!("Up command sent")
-                }
-                Ok(CmdType::Down(inter)) => {
-                    println!("Sending down command");
-                    slf.down(inter);
-                    println!("Down command sent")
-                }
-                Ok(CmdType::Send(addr, msg)) => {
-                    println!("Sending message");
-                    slf.send(addr, msg);
-                    println!("Message sent");
-                }
+                Ok(CmdType::Li) => slf.li(),
+                Ok(CmdType::Ln) => slf.ln(),
+                Ok(CmdType::Lr) => slf.lr(),
+                Ok(CmdType::Up(inter)) => slf.up(inter),
+                Ok(CmdType::Down(inter)) => slf.down(inter),
+                Ok(CmdType::Send(addr, msg)) => slf.send(addr, msg),
                 Err(e) => panic!("Error receiving from repl channel: {e:?}"),
             }
-            println!("REPL command handled");
         }
     }
     /// Listen for messages on node interfaces
     fn interface_listen(slf_mutex: Arc<Mutex<Node>>) -> () {
-        println!("Listening for interfaces");
         loop {
             //println!("Waiting for messages from interfaces");
             let mut packets = Vec::new();
