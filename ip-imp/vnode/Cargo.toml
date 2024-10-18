@@ -7,5 +7,6 @@ edition = "2021"
 library = { path = "../library" }
 lnxparser = { git = "https://github.com/brown-csci1680/ipstack-utils" }
 easy-repl = "0.2.1"
+rustyline = "14.0.0"
 mini_async_repl = "0.2.1"
 tokio =  { version = "1.40.0", features = ["full"] }

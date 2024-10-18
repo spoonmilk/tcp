@@ -1,9 +1,12 @@
-use easy_repl::{command, CommandStatus, Repl};
-use easy_repl::anyhow::{self, Context};
-use std::env;
-use library::ip_data_types::{NodeType, CmdType};
-use std::sync::{Arc, Mutex, mpsc::Sender};
+/*use easy_repl::{command, CommandStatus, Repl};
+use easy_repl::anyhow::{self, Context};*/
+use rustyline::{Editor, history::DefaultHistory, error::ReadlineError};
+use std::result;
+//use std::env;
+use library::ip_data_types::{CmdType, NodeType};
+use std::sync::mpsc::Sender;//{Arc, Mutex, mpsc::Sender};
 
+/*
 pub fn run_repl(_n_type: NodeType, send_nchan: Sender<CmdType>) -> anyhow::Result<()> {
     let send_nchan_mut = Arc::new(Mutex::new(send_nchan));
     let mut repl = Repl::builder()
@@ -82,5 +85,75 @@ fn send_cmd(command: CmdType, send_nchan_mut: Arc<Mutex<Sender<CmdType>>>) {
     match send_nchan.send(command) {
         Err(e) => eprintln!("Error: Encountered error while sending command to node: {}", e),
         _ => (),
+    }
+}*/
+
+struct NodeRep {
+    _n_type: NodeType,
+    send: Sender<CmdType>
+}
+
+impl NodeRep {
+    fn send_cmd(&self, cmd: CmdType) {
+        match self.send.send(cmd) {
+            Err(e) => eprintln!("Error: Encountered error while sending command to node: {}", e),
+            _ => (),
+        }
+    }
+}
+
+pub fn run_repl(n_type: NodeType, send_nchan: Sender<CmdType>) -> () {
+    let mut ed = Editor::<(), DefaultHistory>::new().unwrap();
+    let nd_rep = NodeRep {
+        _n_type: n_type,
+        send: send_nchan
+    };
+    loop {
+        let cmd = ed.readline("> ");
+        match cmd {
+            Ok(cmd) => if let Err(e) = execute_command(cmd, &nd_rep) { println!("{e:?}"); },
+            Err(ReadlineError::Interrupted) => {
+                println!("Exiting");
+                break;
+            },
+            Err(e) => eprintln!("{e:?}")
+        }
+    }
+}
+
+fn execute_command(cmd: String, nd_rep: &NodeRep) -> result::Result<(), String> {
+    let mut split_cmd: Vec<&str> = cmd.trim().split_whitespace().collect();
+    if split_cmd.is_empty() {
+        return Err(String::from("No command input"))
+    }
+    let cmd = split_cmd.remove(0);
+    let mut args = split_cmd.iter().map(|&s| s.to_string()).collect();
+    if let Err(e) = proper_num_args(cmd, &args) {
+        return Err(e);
+    }
+    let cmd_to_send = match cmd {
+        "li" => CmdType::Li,
+        "ln" => CmdType::Ln,
+        "lr" => CmdType::Lr,
+        "up" => CmdType::Up(args.remove(0)),
+        "down" => CmdType::Down(args.remove(0)),
+        "send" => CmdType::Send(args.remove(0), args.remove(0)),
+        _ => return Err(String::from("Improper number of arguments")) //Should never happen in practice
+    };
+    nd_rep.send_cmd(cmd_to_send);
+    Ok(())
+}
+
+fn proper_num_args(cmd: &str, args: &Vec<String>) -> result::Result<(), String> {
+    let proper_num = match cmd {
+        "li" | "ln" | "lr" => 0,
+        "up" | "down" => 1,
+        "send" => 2,
+        _ => return Err(String::from("Invalid command"))
+    };
+    if proper_num != args.len() {
+        Err(String::from("Improper number of arguments"))
+    } else {
+        Ok(())
     }
 }
