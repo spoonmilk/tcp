@@ -39,7 +39,7 @@ pub enum RouteType {
     ToSelf, //Routes where data is passed directly to the node - are not officially routes (I guess) and do not need to be printed out when lr REPL command is run
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum ForwardingOption {
     Ip(Ipv4Addr), //Forwarding to an IP address
     Inter(String), // Forwarding to an interface - the String is the name of the interface

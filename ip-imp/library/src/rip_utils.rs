@@ -70,47 +70,42 @@ pub fn serialize_rip(rip_msg: RipMsg) -> Vec<u8> {
     ret
 }
 
+fn rip_to_route (rip_msg: RipRoute) -> Route {
+    Route::new(RouteType::Rip, Some(rip_msg.cost), ForwardingOption::Ip(Ipv4Addr::from(rip_msg.address)))
+}
+
 /// Updates an entry in a node's RIP table according to a RIP route
-pub fn route_update(rip_msg: RipRoute, rip_table: &mut HashMap<Ipv4Net, RipRoute>) {
-    let new_net = Ipv4Net::with_netmask(
-        Ipv4Addr::from(rip_msg.address),
-        Ipv4Addr::from(rip_msg.mask)
+pub fn route_update(rip_rt: RipRoute, fwd_table: &mut HashMap<Ipv4Net, Route>) {
+    let rip_net = Ipv4Net::with_netmask(
+        Ipv4Addr::from(rip_rt.address),
+        Ipv4Addr::from(rip_rt.mask)
     ).unwrap();
 
-    // Check if route already exists
-    if rip_table.contains_key(&new_net) {
-        // If it does, check cost
-        let org_route = rip_table.get_mut(&new_net).unwrap();
-        // Cost is less? Update to new rip message
-        if org_route.cost > rip_msg.cost {
-            rip_table.insert(new_net.clone(), rip_msg.clone());
-        } else if
-            // Cost is more? Check topology
-            org_route.cost < rip_msg.cost
-        {
-            // Topology is different
-            if org_route.mask == rip_msg.mask {
-                rip_table.insert(new_net.clone(), rip_msg.clone());
-            } // Ignore if else
+    if fwd_table.contains_key(&rip_net) {
+        let prev_route = fwd_table.get(&rip_net).unwrap();
+
+        match prev_route.cost {
+            Some(cost) => {
+                if cost > rip_rt.cost {
+                    // If lower cost, change next hop
+                    fwd_table.insert(rip_net, rip_to_route(rip_rt));
+                } else {
+                    if prev_route.next_hop == ForwardingOption::Ip(Ipv4Addr::from(rip_rt.address)) {
+                        // Network topology has changed
+                        fwd_table.insert(rip_net, rip_to_route(rip_rt));
+                    }
+                }
+            }, 
+            None => (), // Route is to self, do nothing
         }
     } else {
-        // Add new route
-        rip_table.insert(new_net.clone(), rip_msg.clone());
+        fwd_table.insert(rip_net, rip_to_route(rip_rt));
     }
 }
 
 /// Updates a node's RIP table according to a RIP message
-pub fn update_rip_table(rip_msg: RipMsg, rip_table: &mut HashMap<Ipv4Net, RipRoute>) {
+pub fn update_fwd_table(rip_msg: RipMsg, fwd_table: &mut HashMap<Ipv4Net, Route>) {
     for route in rip_msg.routes {
-        route_update(route, rip_table);
+        route_update(route, fwd_table);
     }
-}
-
-/// Takes in the RIP table and returns a RIP update
-pub fn form_rip_update(rip_table: &mut HashMap<Ipv4Net, RipRoute>) -> RipMsg {
-    let mut routes = Vec::new();
-    for (net, route) in rip_table {
-        routes.push(RipRoute::new(route.cost, net.network().into(), net.netmask().into()));
-    }
-    RipMsg::new(2, routes.len() as u16, routes)
 }
