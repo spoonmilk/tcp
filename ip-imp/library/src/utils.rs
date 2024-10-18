@@ -244,7 +244,7 @@ impl Interface {
         }
     }
     fn pass_packet(&mut self, pack: Packet) -> result::Result<(), SendError<Packet>> {
-        self.chan.send.send(pack)
+        self.chan.send.send(pack) 
     }
 }
 

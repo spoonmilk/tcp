@@ -15,7 +15,7 @@ pub struct Node {
     interfaces: Vec<Interface>, //Is depleted upon startup when all interface threads are spawned - use interface_reps to find information about each interface
     interface_reps: HashMap<String, InterfaceRep>, //Maps an interface's name to its associated InterfaceRep
     forwarding_table: HashMap<Ipv4Net, Route>,
-    rip_neighbors: HashMap<Ipv4Net, RipRoute>,
+    rip_neighbors: HashMap<Ipv4Net, Route>,
     // RIP neighbors vec
     // Timeout table(?)
 }
@@ -26,7 +26,7 @@ impl Node {
         interfaces: Vec<Interface>,
         interface_reps: HashMap<String, InterfaceRep>,
         forwarding_table: HashMap<Ipv4Net, Route>,
-        rip_neighbors: HashMap<Ipv4Net, RipRoute>,
+        rip_neighbors: HashMap<Ipv4Net, Route>,
     ) -> Node {
         Node {
             n_type,
@@ -215,7 +215,6 @@ impl Node {
         };
         inter_rep
             .command(InterCmd::BuildSend(pb, next_hop))
-            
             .expect("Error sending connecting to interface or sending packet"); //COULD BE MORE ROBUST
     }
      fn forward_packet(
@@ -321,12 +320,10 @@ impl Node {
         println!("{}", retstr);
         // Logic for editing fwd table
     }
-    fn build_rip_request(&mut self) -> Vec<u8> {
-        serialize_rip(table_to_rip(&mut self.forwarding_table))
-    }
-    pub  fn broadcast_rip(&mut self) -> () {
-        let msg = self.build_rip_request();
-        for (addr, _) in self.rip_neighbors.iter() {}
+    pub fn send_rip_request(&mut self, fwd_table: &mut HashMap<Ipv4Net, Route>, dst: Ipv4Addr) -> () {
+        let rip_msg: RipMsg = table_to_rip(fwd_table, 1);
+        let ser_rip: Vec<u8> = serialize_rip(rip_msg);
+        self.send(dst.to_string(), String::from_utf8(ser_rip).unwrap());
     }
 }
 

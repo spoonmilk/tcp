@@ -47,7 +47,7 @@ impl RipRoute {
 // Things we should add
 // New Node field
 
-pub fn table_to_rip(forwarding_table: &mut HashMap<Ipv4Net, Route>) -> RipMsg {
+pub fn table_to_rip(forwarding_table: &mut HashMap<Ipv4Net, Route>, rip_command: u16) -> RipMsg {
     let mut routes = Vec::new();
     for (net, route) in forwarding_table {
         match route.cost {
@@ -55,9 +55,10 @@ pub fn table_to_rip(forwarding_table: &mut HashMap<Ipv4Net, Route>) -> RipMsg {
             None => routes.push(RipRoute::new(0, net.network().into(), net.netmask().into())),
         }
     }
-    RipMsg::new(2, routes.len() as u16, routes)
+    RipMsg::new(rip_command, routes.len() as u16, routes)
 }
 
+/// Serializes a RIP message to a vector of bytes
 pub fn serialize_rip(rip_msg: RipMsg) -> Vec<u8> {
     let mut ret = Vec::new();
     ret.extend_from_slice(&rip_msg.command.to_be_bytes());
@@ -69,6 +70,40 @@ pub fn serialize_rip(rip_msg: RipMsg) -> Vec<u8> {
     }
     ret
 }
+
+/// Takes in a vector of bytes and returns a RIP message
+pub fn deserialize_rip(buf: &[u8]) -> RipMsg {
+    let mut rip_msg = RipMsg::new(0, 0, Vec::new());
+    let mut offset = 0;
+    rip_msg.command = u16::from_be_bytes(buf[offset..offset + 2].try_into().unwrap());
+    offset += 2;
+    rip_msg.num_entries = u16::from_be_bytes(buf[offset..offset + 2].try_into().unwrap());
+    offset += 2;
+    for _ in 0..rip_msg.num_entries {
+        let cost = u32::from_be_bytes(buf[offset..offset + 4].try_into().unwrap());
+        offset += 4;
+        let address = u32::from_be_bytes(buf[offset..offset + 4].try_into().unwrap());
+        offset += 4;
+        let mask = u32::from_be_bytes(buf[offset..offset + 4].try_into().unwrap());
+        offset += 4;
+        rip_msg.routes.push(RipRoute::new(cost, address, mask));
+    }
+    rip_msg
+}
+
+fn check_rip_validity(rip_msg: &RipMsg) -> bool {
+    if rip_msg.command != 1 || rip_msg.command != 2 {
+        false
+    } else if rip_msg.num_entries > rip_msg.routes.len() as u16 {
+        false
+    } else {
+        true
+    }
+}
+
+
+
+
 
 fn rip_to_route (rip_msg: RipRoute) -> Route {
     Route::new(RouteType::Rip, Some(rip_msg.cost), ForwardingOption::Ip(Ipv4Addr::from(rip_msg.address)))
