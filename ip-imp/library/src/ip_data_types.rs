@@ -332,14 +332,14 @@ impl Node {
     fn send_rip(&mut self, fwd_table: &mut HashMap<Ipv4Net, Route>, dst: Ipv4Addr, command: u16) -> () {
         match command {
             1 => { // Send a routing request
-                let rip_msg: RipMsg = table_to_rip(fwd_table, 1);
-                let ser_rip: Vec<u8> = serialize_rip(rip_msg);
-                self.send(dst.to_string(), String::from_utf8(ser_rip).unwrap());
+                let rip_req_msg: RipMsg = RipMsg::new(1, 0, Vec::new());
+                let ser_req_rip: Vec<u8> = serialize_rip(rip_req_msg);
+                self.send(dst.to_string(), String::from_utf8(ser_req_rip).unwrap());
             }
             2 => { // Send a routing response
-                let rip_msg: RipMsg = table_to_rip(fwd_table, 1);
-                let ser_rip: Vec<u8> = serialize_rip(rip_msg);
-                self.send(dst.to_string(), String::from_utf8(ser_rip).unwrap());
+                let rip_resp_msg: RipMsg = table_to_rip(fwd_table, 1);
+                let ser_resp_rip: Vec<u8> = serialize_rip(rip_resp_msg);
+                self.send(dst.to_string(), String::from_utf8(ser_resp_rip).unwrap());
             }
             _ => panic!("Invalid RIP command type!"),
         }
