@@ -182,7 +182,7 @@ impl Node {
             InterfaceStatus::Up => {} //Don't do anything if already up
             InterfaceStatus::Down => {
                 inter_rep
-                    .command(InterCmd::ToggleStatus)      
+                    .command(InterCmd::ToggleStatus)
                     .expect("Error connecting to interface");
                 inter_rep.status = InterfaceStatus::Up;
             }
@@ -217,10 +217,7 @@ impl Node {
             .command(InterCmd::BuildSend(pb, next_hop))
             .expect("Error sending connecting to interface or sending packet"); //COULD BE MORE ROBUST
     }
-     fn forward_packet(
-        &mut self,
-        pack: Packet,
-    ) -> std::result::Result<(), SendError<InterCmd>> {
+    fn forward_packet(&mut self, pack: Packet) -> std::result::Result<(), SendError<InterCmd>> {
         //Made it  cause it'll give some efficiency gains with sending through the channel (I think)
         //Run it through check_packet to see if it should be dropped
         if !Node::packet_valid(pack.clone()) {
@@ -320,10 +317,20 @@ impl Node {
         println!("{}", retstr);
         // Logic for editing fwd table
     }
-    pub fn send_rip_request(&mut self, fwd_table: &mut HashMap<Ipv4Net, Route>, dst: Ipv4Addr) -> () {
-        let rip_msg: RipMsg = table_to_rip(fwd_table, 1);
-        let ser_rip: Vec<u8> = serialize_rip(rip_msg);
-        self.send(dst.to_string(), String::from_utf8(ser_rip).unwrap());
+    fn send_rip(&mut self, fwd_table: &mut HashMap<Ipv4Net, Route>, dst: Ipv4Addr, command: u16) -> () {
+        match command {
+            1 => {
+                let rip_msg: RipMsg = table_to_rip(fwd_table, 1);
+                let ser_rip: Vec<u8> = serialize_rip(rip_msg);
+                self.send(dst.to_string(), String::from_utf8(ser_rip).unwrap());
+            }
+            2 => {
+                let rip_msg: RipMsg = table_to_rip(fwd_table, 1);
+                let ser_rip: Vec<u8> = serialize_rip(rip_msg);
+                self.send(dst.to_string(), String::from_utf8(ser_rip).unwrap());
+            }
+            _ => panic!("Invalid RIP command type!"),
+        }
     }
 }
 
