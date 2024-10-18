@@ -49,8 +49,8 @@ fn init_interfaces(
 
 ///Creates a pair of connected BiChans for corresponding interfaces and interfaceReps
 fn make_bichans() -> (BiChan<Packet, InterCmd>, BiChan<InterCmd, Packet>) {
-    let chan1 = channel::<Packet>(CHANNEL_CAPACITY);
-    let chan2 = channel::<InterCmd>(CHANNEL_CAPACITY);
+    let chan1 = channel::<Packet>();
+    let chan2 = channel::<InterCmd>();
     let inter_chan = BiChan {
         send: chan1.0,
         recv: chan2.1,

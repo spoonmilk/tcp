@@ -1,9 +1,8 @@
 use std::env;
 use std::thread::spawn;
-use tokio::sync::mpsc::channel;
+use std::sync::mpsc::channel;
 use lnxparser::IPConfig;
 use library::config::initialize;
-use library::ip_data_types::CHANNEL_CAPACITY;
 mod repl;
 //use library::ip_data_types::{Node, NodeType};
 
@@ -23,7 +22,7 @@ fn main() {
     };
     //Create a channel and run the node
     let nd_type = nd.n_type.clone();
-    let (send, recv) = channel(CHANNEL_CAPACITY);
+    let (send, recv) = channel();
     spawn(move || nd.run(recv));
     //Run REPL
     let _ = repl::run_repl(nd_type, send);
