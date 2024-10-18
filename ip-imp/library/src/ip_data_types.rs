@@ -321,8 +321,8 @@ impl Node {
         println!("{}", retstr);
         // Logic for editing fwd table
     }
-    fn build_rip_request(&mut self) -> RipMsg {
-        form_rip_update(&mut self.rip_neighbors)
+    fn build_rip_request(&mut self) -> Vec<u8> {
+        serialize_rip(table_to_rip(&mut self.forwarding_table))
     }
     pub  fn broadcast_rip(&mut self) -> () {
         let msg = self.build_rip_request();
