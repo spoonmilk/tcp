@@ -71,8 +71,8 @@ pub fn initialize(config_info: IPConfig) -> Result<Node> {
     );
     //Find node type
     let n_type = match config_info.routing_mode {
-        RoutingType::None => NodeType::Host,
-        RoutingType::Static => NodeType::Router,
+        RoutingType::None => panic!("Encountered None routing mode, unused."),
+        RoutingType::Static => NodeType::Host,
         RoutingType::Rip => NodeType::Router,
     };
     //Create forwarding table
