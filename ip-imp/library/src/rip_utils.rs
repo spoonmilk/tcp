@@ -36,6 +36,10 @@ impl RipRoute {
     }
 }
 
+pub struct RipPacket {
+    
+}
+
 // Methods we need
 
 // Thread in nodes that sends outAdvertisement
@@ -100,10 +104,6 @@ fn check_rip_validity(rip_msg: &RipMsg) -> bool {
         true
     }
 }
-
-
-
-
 
 fn rip_to_route (rip_msg: RipRoute) -> Route {
     Route::new(RouteType::Rip, Some(rip_msg.cost), ForwardingOption::Ip(Ipv4Addr::from(rip_msg.address)))
