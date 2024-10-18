@@ -1,6 +1,6 @@
 use crate::{prelude::*, rip_utils::RipMsg};
 use std::io::{Error, ErrorKind};
-use std::net::UdpSocket;
+use tokio::net::UdpSocket;
 
 /*
 INCREDIBLY CONFUSING CHART OF FWDING TABLE STRUCTURE INTENDED TO MAKE SAID STRUCTURE LESS CONFUSING
@@ -71,9 +71,9 @@ impl InterfaceRep {
             chan,
         }
     }
-    pub fn command(&mut self, cmd: InterCmd) -> result::Result<(), SendError<InterCmd>> {
+    pub async fn command(&mut self, cmd: InterCmd) -> result::Result<(), mpsc::error::SendError<InterCmd>> {
         //Sends the input command to the interface
-        self.chan.send.send(cmd)
+        self.chan.send.send(cmd).await
     }
 }
 
@@ -132,43 +132,49 @@ impl Interface {
             status: InterfaceStatus::Up, //Status always starts as Up
         }
     }
-    pub fn run(self) -> () {
+    pub async fn run(self) -> () {
         //Create mutexes to protect self
         let self_mutex1 = Arc::new(Mutex::new(self));
         let self_mutex2 = Arc::clone(&self_mutex1);
 
         //Listen for commands from the almighty node
-        thread::spawn(move || Interface::node_listen(self_mutex1));
-        //Listen for packets coming out of the ether-void
-        Interface::ether_listen(self_mutex2);
-    }
-    fn node_listen(slf_mutex: Arc<Mutex<Interface>>) -> () {
-        let mut slf = slf_mutex.lock().unwrap();
-        loop { 
-            let chan_res = slf.chan.recv.recv();
-            match chan_res {
-                Ok(InterCmd::BuildSend(pb, next_hop)) => { 
-                    let builded = slf.build(pb);
-                    slf.send(builded, next_hop).expect("Error sending packet") 
+        let mut node_listen = tokio::spawn(async move {
+            let mut slf1 = self_mutex1.lock().await;
+            loop { 
+                let chan_res = slf1.chan.recv.recv().await;
+                match chan_res {
+                    Some(InterCmd::BuildSend(pb, next_hop)) => { 
+                        let builded = slf1.build(pb);
+                        slf1.send(builded, next_hop).await.expect("Error sending packet") 
+                    }
+                    Some(InterCmd::Send(pack, next_hop)) => slf1.send(pack, next_hop).await.expect("Error sending packet"),
+                    Some(InterCmd::ToggleStatus) => slf1.toggle_status(),
+                    None => panic!("Channel to almight node disconnected :(")
                 }
-                Ok(InterCmd::Send(pack, next_hop)) => slf.send(pack, next_hop).expect("Error sending packet"),
-                Ok(InterCmd::ToggleStatus) => slf.toggle_status(),
-                Err(e) => panic!("Error receiving on channel: {e:?}")
             }
-        }
-    } 
-    fn ether_listen(slf_mutex: Arc<Mutex<Interface>>) -> () {
-        let mut slf = slf_mutex.lock().unwrap();
+        });
+        //Listen for packets coming out of the ether-void
+        let mut ether_listen = tokio::spawn(async move {
+            let mut slf2 = self_mutex2.lock().await;
+            loop {
+                match slf2.status {
+                    InterfaceStatus::Up => { 
+                        let pack = slf2.recv().await.expect("Error receiving packet");
+                        slf2.pass_packet(pack).await.expect("Channel to almighty node disconnected");
+                    },
+                    InterfaceStatus::Down => tokio::task::yield_now().await //Avoids busy waiting
+                }
+            }
+        });
+        //Switch betwen listening for node commands or ether packets
         loop {
-            match slf.status {
-                InterfaceStatus::Up => { 
-                    let pack = slf.recv().expect("Error receiving packet");
-                    slf.pass_packet(pack).expect("Channel to almighty node disconnected");
-                },
-                InterfaceStatus::Down => {} //Avoids busy waiting
+            tokio::select! {
+                _ = &mut node_listen => {},
+                _ = &mut ether_listen => {}
             }
         }
     }
+
     fn toggle_status(&mut self) -> () {
         match self.status {
             InterfaceStatus::Up => self.status = InterfaceStatus::Down,
@@ -195,27 +201,27 @@ impl Interface {
         header.header_checksum = header.calc_header_checksum();
         return Packet { header, data: payload } // Packet built!
     }
-    pub fn send(&mut self, pack: Packet, next_hop: Ipv4Addr) -> std::io::Result<()> {
+    pub async fn send(&mut self, pack: Packet, next_hop: Ipv4Addr) -> std::io::Result<()> {
         // Grab neighbor address to send to
         let dst_neighbor = self.neighbors.get(&next_hop).unwrap();
         // Self address for binding
         let bind_addr = format!("127.0.0.1:{}", self.udp_port);
         // Bind to Udp port and attempt to send to neighbor
-        let sock = UdpSocket::bind(bind_addr)?;
+        let sock = UdpSocket::bind(bind_addr).await?;
 
-        match sock.send_to(&pack.data, format!("127.0.0.1:{}", dst_neighbor)) {
+        match sock.send_to(&pack.data, format!("127.0.0.1:{}", dst_neighbor)).await {
             // TODO: Do something on Ok? Make error more descriptive?
             Ok(_) => Ok(()),
             Err(e) => Err(e),
         }
     }
-    pub fn recv(&mut self) -> Result<Packet> {
+    pub async fn recv(&mut self) -> Result<Packet> {
         let mut received = false;
-        match UdpSocket::bind(format!("127.0.0.1:{}", self.udp_port)) {
+        match UdpSocket::bind(format!("127.0.0.1:{}", self.udp_port)).await {
             Ok(socket) => {
                 let mut buf:[u8; 40] = [0; 40];
                 while !received {
-                    let len = socket.recv(&mut buf)?; // Break if receive
+                    let len = socket.recv(&mut buf).await?; // Break if receive
                     if len != 0 {
                         received = !received;
                     }
@@ -232,8 +238,8 @@ impl Interface {
             Err(e) => Err(e)
         }
     }
-    fn pass_packet(&mut self, pack: Packet) -> result::Result<(), SendError<Packet>> {
-        self.chan.send.send(pack)
+    async fn pass_packet(&mut self, pack: Packet) -> result::Result<(), mpsc::error::SendError<Packet>> {
+        self.chan.send.send(pack).await
     }
 }
 

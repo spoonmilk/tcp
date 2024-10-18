@@ -1,7 +1,10 @@
 use crate::prelude::*;
-use crate::rip_utils::*;
 use crate::utils::*;
+use crate::rip_utils::*;
 use std::mem;
+use std::thread;
+
+pub static CHANNEL_CAPACITY: usize = 32;
 
 #[derive(Debug, Clone)]
 pub enum NodeType {
@@ -33,12 +36,13 @@ impl Node {
             interfaces,
             interface_reps,
             forwarding_table,
-            rip_neighbors,
+            rip_neighbors
         }
     }
 
     /// Runs the node and spawns interfaces
-    pub fn run(mut self, recv_rchan: Receiver<CmdType>) -> () {
+    //#[tokio::main]
+    pub async fn run(mut self, mut recv_rchan: Receiver<CmdType>) -> () {
         //STARTUP TASKS
         //Spawn all interfaces - interfaces is DEPLETED after this and unusable
         let interfaces = mem::take(&mut self.interfaces);
@@ -53,71 +57,88 @@ impl Node {
         let self_mutex1 = Arc::new(Mutex::new(self));
         let self_mutex2 = Arc::clone(&self_mutex1);
         println!("Mutexes spawned");
+
         //Listen for REPL prompts from REPL thread and handle them
-        thread::spawn(move || Node::repl_listen(self_mutex1, recv_rchan));
-        //Listen for messages from interfaces and handle them
-        Node::interface_listen(self_mutex2);
-    }
-    fn repl_listen(slf_mutex: Arc<Mutex<Node>>, recv_rchan: Receiver<CmdType>) -> () {
-        println!("Listening for REPL");
-        loop {
-            println!("Waiting for REPL command");
-            let chan_res = recv_rchan.recv();
-            println!("REPL command received");
-            let mut slf = slf_mutex.lock().unwrap();
-            match chan_res {
-                Ok(CmdType::Li) => {
-                    slf.li();
-                    println!("Send li command")
+        let mut repl_listen = tokio::spawn(async move {
+            //let got = recv_rchan.recv().await.expect("Error recving");
+            //println!("GOT2: {got:?}");
+            println!("Listening for REPL");
+            loop {
+                println!("Waiting for REPL command");
+                let chan_res = recv_rchan.recv().await;
+                println!("REPL command received");
+                let mut slf = self_mutex1.lock().await;
+                match chan_res {
+                    Some(CmdType::Li) => {
+                        slf.li();
+                        println!("Send li command")
+                    }
+                    Some(CmdType::Ln) => {
+                        slf.ln();
+                        println!("Send ln command")
+                    }
+                    Some(CmdType::Lr) => {
+                        slf.lr();
+                        println!("Send lr command")
+                    }
+                    Some(CmdType::Up(inter)) => {
+                        println!("Sending up command");
+                        slf.up(inter).await;
+                        println!("Up command sent")
+                    }
+                    Some(CmdType::Down(inter)) => {
+                        println!("Sending down command");
+                        slf.down(inter).await;
+                        println!("Down command sent")
+                    }
+                    Some(CmdType::Send(addr, msg)) => {
+                        println!("Sending message");
+                        slf.send(addr, msg).await;
+                        println!("Message sent")
+                    }
+                    None => panic!("Channel to REPL disconnected :("),
                 }
-                Ok(CmdType::Ln) => {
-                    slf.ln();
-                    println!("Send ln command")
-                }
-                Ok(CmdType::Lr) => {
-                    slf.lr();
-                    println!("Send lr command")
-                }
-                Ok(CmdType::Up(inter)) => {
-                    println!("Sending up command");
-                    slf.up(inter);
-                    println!("Up command sent")
-                }
-                Ok(CmdType::Down(inter)) => {
-                    println!("Sending down command");
-                    slf.down(inter);
-                    println!("Down command sent")
-                }
-                Ok(CmdType::Send(addr, msg)) => {
-                    println!("Sending message");
-                    slf.send(addr, msg);
-                    println!("Message sent");
-                }
-                Err(e) => panic!("Error receiving from repl channel: {e:?}"),
+                println!("REPL command handled");
+                tokio::task::yield_now().await
             }
-            println!("REPL command handled");
-        }
-    }
-    fn interface_listen(slf_mutex: Arc<Mutex<Node>>) -> () {
-        println!("Listening for interfaces");
-        loop {
-            //println!("Waiting for messages from interfaces");
-            let mut packets = Vec::new();
-            let mut slf = slf_mutex.lock().unwrap();
-            for inter_rep in slf.interface_reps.values_mut() {
-                let chan = &mut inter_rep.chan;
-                match chan.recv.try_recv() {
-                    Ok(pack) => packets.push(pack), //Can't call slf.forward_packet(pack) directly here for ownership reasons
-                    Err(TryRecvError::Empty) => {}
-                    Err(TryRecvError::Disconnected) => {
-                        panic!("Channel disconnected for some reason")
+        });
+        //Listen for messages from interfaces and handle them
+        let mut interface_listen = tokio::spawn(async move {
+            println!("Listening for interfaces");
+            loop {
+                //println!("Waiting for messages from interfaces");
+                let mut packets = Vec::new();
+                let mut slf = self_mutex2.lock().await;
+                for inter_rep in slf.interface_reps.values_mut() {
+                    let chan = &mut inter_rep.chan;
+                    match chan.recv.try_recv() {
+                        Ok(pack) => packets.push(pack), //Can't call slf.forward_packet(pack) directly here for ownership reasons
+                        Err(TryRecvError::Empty) => { }
+                        Err(TryRecvError::Disconnected) => {
+                            panic!("Channel disconnected for some reason")
+                        }
                     }
                 }
+                //println!("Received {} packets from interfaces", packets.len());
+                for pack in packets {
+                    println!("Forwarding packet");
+                    slf.forward_packet(pack)
+                        .await
+                        .expect("Error forwarding packet");
+                }
+                //tokio::task::yield_now().await
+                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
             }
-            //println!("Received {} packets from interfaces", packets.len());
-            for pack in packets {
-                println!("Forwarding packet");
-                slf.forward_packet(pack).expect("Error forwarding packet");
+        });
+        //Select whether to listen for stuff from the REPL or to listen for interface messages
+        loop {
+            tokio::select! {
+                _ = &mut repl_listen => { 
+                    println!("Repl listener task completed");
+                },
+                _ = &mut interface_listen => { 
+                    println!("Interface listener task completed");
+                }
             }
         }
     }
@@ -176,31 +197,33 @@ impl Node {
             )
         }
     }
-    fn up(&mut self, inter: String) -> () {
+    async fn up(&mut self, inter: String) -> () {
         let inter_rep = self.interface_reps.get_mut(&inter).unwrap();
         match inter_rep.status {
             InterfaceStatus::Up => {} //Don't do anything if already up
             InterfaceStatus::Down => {
                 inter_rep
-                    .command(InterCmd::ToggleStatus)      
+                    .command(InterCmd::ToggleStatus)
+                    .await
                     .expect("Error connecting to interface");
                 inter_rep.status = InterfaceStatus::Up;
             }
         }
     }
-    fn down(&mut self, inter: String) -> () {
+    async fn down(&mut self, inter: String) -> () {
         let inter_rep = self.interface_reps.get_mut(&inter).unwrap();
         match inter_rep.status {
             InterfaceStatus::Up => {
                 inter_rep
                     .command(InterCmd::ToggleStatus)
+                    .await
                     .expect("Error connecting to interface");
                 inter_rep.status = InterfaceStatus::Down;
             }
             InterfaceStatus::Down => {} //Don't do anything if already down
         }
     }
-    fn send(&mut self, addr: String, msg: String) -> () {
+    async fn send(&mut self, addr: String, msg: String) -> () {
         let ip_addr = addr.as_str().parse().expect("Invalid ip address"); //FIX THIS LATER
         let pb = PacketBasis {
             dst_ip: ip_addr,
@@ -215,14 +238,14 @@ impl Node {
         };
         inter_rep
             .command(InterCmd::BuildSend(pb, next_hop))
-            
+            .await
             .expect("Error sending connecting to interface or sending packet"); //COULD BE MORE ROBUST
     }
-     fn forward_packet(
+    async fn forward_packet(
         &mut self,
         pack: Packet,
     ) -> std::result::Result<(), SendError<InterCmd>> {
-        //Made it  cause it'll give some efficiency gains with sending through the channel (I think)
+        //Made it async cause it'll give some efficiency gains with sending through the channel (I think)
         //Run it through check_packet to see if it should be dropped
         if !Node::packet_valid(pack.clone()) {
             return Ok(());
@@ -241,7 +264,7 @@ impl Node {
         //Find the proper interface and hand the packet off to it
         let inter_rep_name = inter_rep_name.clone(); //Why? To get around stinkin Rust borrow checker. Get rid of this line (and the borrow on the next) to see why. Ugh
         let inter_rep = self.interface_reps.get_mut(&inter_rep_name).unwrap();
-        inter_rep.command(InterCmd::Send(pack, next_hop))
+        inter_rep.command(InterCmd::Send(pack, next_hop)).await
     }
     fn proper_interface(&self, dst_addr: &Ipv4Addr) -> Option<(&String, Ipv4Addr)> {
         let mut dst_ip = dst_addr;
@@ -328,12 +351,14 @@ impl Node {
         println!("{}", retstr);
         // Logic for editing fwd table
     }
-    fn build_rip_request(&mut self) -> RipMsg {
+    fn build_rip_request (&mut self) -> RipMsg {
         form_rip_update(&mut self.rip_neighbors)
     }
-    pub  fn broadcast_rip(&mut self) -> () {
+    pub async fn broadcast_rip (&mut self) -> () {
         let msg = self.build_rip_request();
-        for (addr, _) in self.rip_neighbors.iter() {}
+        for (addr, _) in self.rip_neighbors.iter() {
+            
+        }
     }
 }
 

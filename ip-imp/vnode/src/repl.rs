@@ -2,15 +2,17 @@ use easy_repl::{command, CommandStatus, Repl};
 use easy_repl::anyhow::{self, Context};
 use std::env;
 use library::ip_data_types::{NodeType, CmdType};
-use tokio::sync::mpsc::Sender;
+use std::sync::{Arc, Mutex, mpsc::Sender};
 
-pub async fn run_repl(_n_type: NodeType, send_nchan: Sender<CmdType>) -> anyhow::Result<()> {
+pub fn run_repl(_n_type: NodeType, send_nchan: Sender<CmdType>) -> anyhow::Result<()> {
+    let send_nchan_mut = Arc::new(Mutex::new(send_nchan));
     let mut repl = Repl::builder()
         .add("li", command! {
             "li: List interfaces",
             () => || {
                 let ls_cmd: CmdType = CmdType::Li;
-                send_cmd(ls_cmd, send_nchan);
+                let send_nchan_mut = Arc::clone(&send_nchan_mut);
+                send_cmd(ls_cmd, send_nchan_mut);
                 Ok(CommandStatus::Done)
             }
         })
@@ -18,7 +20,8 @@ pub async fn run_repl(_n_type: NodeType, send_nchan: Sender<CmdType>) -> anyhow:
             "ln: List neighbors",
             () => || {
                 let ln_cmd: CmdType = CmdType::Ln;
-                send_cmd(ln_cmd, send_nchan);
+                let send_nchan_mut = Arc::clone(&send_nchan_mut);
+                send_cmd(ln_cmd, send_nchan_mut);
                 Ok(CommandStatus::Done)
             }
         })
@@ -26,7 +29,8 @@ pub async fn run_repl(_n_type: NodeType, send_nchan: Sender<CmdType>) -> anyhow:
             "lr: List routes",
             () => || {
                 let lr_cmd: CmdType = CmdType::Lr;
-                send_cmd(lr_cmd, send_nchan);
+                let send_nchan_mut = Arc::clone(&send_nchan_mut);
+                send_cmd(lr_cmd, send_nchan_mut);
                 Ok(CommandStatus::Done)
             }
         })
@@ -34,7 +38,8 @@ pub async fn run_repl(_n_type: NodeType, send_nchan: Sender<CmdType>) -> anyhow:
             "down: disable interface <ifname>",
             (ifname: String) => |ifname| {
                 let down_cmd: CmdType = CmdType::Down(ifname);
-                send_cmd(down_cmd, send_nchan);
+                let send_nchan_mut = Arc::clone(&send_nchan_mut);
+                send_cmd(down_cmd, send_nchan_mut);
                 Ok(CommandStatus::Done)
             }
         })
@@ -42,6 +47,8 @@ pub async fn run_repl(_n_type: NodeType, send_nchan: Sender<CmdType>) -> anyhow:
             "up: enable interface <ifname>",
             (ifname: String) => |ifname| {
                 let up_cmd: CmdType = CmdType::Up(ifname);
+                let send_nchan_mut = Arc::clone(&send_nchan_mut);
+                send_cmd(up_cmd, send_nchan_mut);
                 Ok(CommandStatus::Done)
             }
         })
@@ -58,7 +65,8 @@ pub async fn run_repl(_n_type: NodeType, send_nchan: Sender<CmdType>) -> anyhow:
                     }
                 }
                 let sender_cmd: CmdType = CmdType::Send(addr, retstr);
-                send_cmd(sender_cmd, send_nchan);
+                let send_nchan_mut = Arc::clone(&send_nchan_mut);
+                send_cmd(sender_cmd, send_nchan_mut);
                 // Send packet with message
                 Ok(CommandStatus::Done)
             }
@@ -69,8 +77,9 @@ pub async fn run_repl(_n_type: NodeType, send_nchan: Sender<CmdType>) -> anyhow:
     repl.run().context("Critical REPL error")
 }
 
-async fn send_cmd(command: CmdType, send_nchan: Sender<CmdType>) {
-    match send_nchan.send(command).await {
+fn send_cmd(command: CmdType, send_nchan_mut: Arc<Mutex<Sender<CmdType>>>) {
+    let send_nchan = send_nchan_mut.lock().unwrap();
+    match send_nchan.send(command) {
         Err(e) => eprintln!("Error: Encountered error while sending command to node: {}", e),
         _ => (),
     }
