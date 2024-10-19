@@ -1,6 +1,7 @@
 use crate::prelude::*;
 use crate::rip_utils::*;
 use crate::utils::*;
+use std::io::{Error, ErrorKind};
 use std::mem;
 
 #[derive(Debug, Clone)]
@@ -186,18 +187,19 @@ impl Node {
             msg,
         };
         let (inter_rep, next_hop) = match self.proper_interface(&ip_addr) {
-            Some((name, next_hop)) => (
+            Ok(Some((name, next_hop))) => (
                 self.interface_reps.get_mut(&name.clone()).unwrap(),
                 next_hop,
             ),
-            None => panic!("Packet sent to self"), //FIX THIS LATER
+            Ok(None) => panic!("Packet sent to self"), //FIX THIS LATER
+            Err(e) => return println!("\nForwarding table entry for address not found: {e:?}")
         };
         inter_rep
             .command(InterCmd::BuildSend(pb, next_hop))
             .expect("Error sending connecting to interface or sending packet"); //COULD BE MORE ROBUST
     }
     /// Forward a packet to the node or to the next hop
-    fn forward_packet(&mut self, pack: Packet) -> std::result::Result<(), SendError<InterCmd>> {
+    fn forward_packet(&mut self, pack: Packet) -> Result<()> {//std::result::Result<(), SendError<InterCmd>> {
         //Made it  cause it'll give some efficiency gains with sending through the channel (I think)
         //Run it through check_packet to see if it should be dropped
         if !Node::packet_valid(pack.clone()) {
@@ -207,7 +209,7 @@ impl Node {
         let pack_header = pack.clone().header;
         //Get the proper interface's name
         let (inter_rep_name, next_hop) =
-            match self.proper_interface(&Ipv4Addr::from(pack_header.destination)) {
+            match self.proper_interface(&Ipv4Addr::from(pack_header.destination))? {
                 Some((name, next_hop)) => (name, next_hop),
                 None => {
                     self.process_packet(pack);
@@ -217,23 +219,25 @@ impl Node {
         //Find the proper interface and hand the packet off to it
         let inter_rep_name = inter_rep_name.clone(); //Why? To get around stinkin Rust borrow checker. Get rid of this line (and the borrow on the next) to see why. Ugh
         let inter_rep = self.interface_reps.get_mut(&inter_rep_name).unwrap();
-        inter_rep.command(InterCmd::Send(pack, next_hop))
+        match inter_rep.command(InterCmd::Send(pack, next_hop)) {
+            Ok(()) => Ok(()),
+            Err(_) => Err(Error::new(ErrorKind::Other, "Send Error"))
+        }
     }
     /// Find the interface to forward a packet to
-    fn proper_interface(&self, dst_addr: &Ipv4Addr) -> Option<(&String, Ipv4Addr)> {
+    fn proper_interface(&self, dst_addr: &Ipv4Addr) -> Result<Option<(&String, Ipv4Addr)>> {
         let mut dst_ip = dst_addr;
         loop {
             //Loop until bottom out at a route that sends to an interface
             //Run it through longest prefix
-            let netmask = Node::longest_prefix(self.forwarding_table.keys().collect(), dst_ip)
-                .expect("Couldn't find matching prefix for {netmask:?}");
+            let netmask = Node::longest_prefix(self.forwarding_table.keys().collect(), dst_ip)?;
             //See what the value tied to that prefix is
             let route = self.forwarding_table.get(&netmask).unwrap();
             //If it's an Ip address, repeat with that IP address, an interface, forward via channel to that interface, if it is a ToSelf, handle internally
             dst_ip = match &route.next_hop {
-                ForwardingOption::Inter(name) => break Some((name, dst_ip.clone())),
+                ForwardingOption::Inter(name) => break Ok(Some((name, dst_ip.clone()))),
                 ForwardingOption::Ip(ip) => ip,
-                ForwardingOption::ToSelf => break None,
+                ForwardingOption::ToSelf => break Ok(None),
             };
         }
     }
@@ -274,7 +278,24 @@ impl Node {
         return updated_pack;
     }
     /// Longest prefix matching for packet forwarding
-    fn longest_prefix(masks: Vec<&Ipv4Net>, addr: &Ipv4Addr) -> Result<Ipv4Net> {
+    fn longest_prefix(prefixes: Vec<&Ipv4Net>, addr: &Ipv4Addr) -> Result<Ipv4Net> {
+        if prefixes.len() < 1 { return Err(Error::new(ErrorKind::Other, "No prefixes to search through")) }
+        let mut current_longest: Option<Ipv4Net> = None;
+        for prefix in prefixes {
+            if prefix.contains(addr) {
+                match current_longest {
+                    Some(curr_prefix) if curr_prefix.prefix_len() < prefix.prefix_len() => current_longest = Some(prefix.clone()),
+                    None => current_longest = Some(prefix.clone()),
+                    _ => {}
+                }
+            }
+        }
+        match current_longest {
+            Some(prefix) => Ok(prefix),
+            None => Err(Error::new(ErrorKind::Other, "No matching prefix found"))
+        }
+    }
+    /*fn longest_prefix(masks: Vec<&Ipv4Net>, addr: &Ipv4Addr) -> Result<Ipv4Net> {
         let mut trie_node = TrieNode::new();
         for mask in masks {
             trie_node.insert(mask.network());
@@ -286,7 +307,7 @@ impl Node {
             }
             Err(e) => Err(e),
         }
-    }
+    }*/
     /// Take in a packet destined for the current node and display information from it
     fn process_packet(&self, pack: Packet) -> () {
         let src = String::from_utf8(Vec::from(pack.header.source)).unwrap();
@@ -300,6 +321,7 @@ impl Node {
         println!("{}", retstr);
         // Logic for editing fwd table
     }
+    /*
     fn send_rip(&mut self, fwd_table: &mut HashMap<Ipv4Net, Route>, dst: Ipv4Addr, command: u16) -> () {
         match command {
             1 => { // Send a routing request
@@ -314,7 +336,7 @@ impl Node {
             }
             _ => panic!("Invalid RIP command type!"),
         }
-    }
+    }*/
     fn rip_respond(&mut self) -> () {
         // TODO: Split horizon/poison reverse adding
 

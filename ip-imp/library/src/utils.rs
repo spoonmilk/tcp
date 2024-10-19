@@ -1,6 +1,9 @@
 use crate::{prelude::*, rip_utils::RipMsg};
 use std::io::{Error, ErrorKind};
+use std::mem;
 use std::net::UdpSocket;
+use std::sync::RwLock;
+use std::time::Duration;
 
 /*
 INCREDIBLY CONFUSING CHART OF FWDING TABLE STRUCTURE INTENDED TO MAKE SAID STRUCTURE LESS CONFUSING
@@ -15,7 +18,7 @@ Key: Ipv4Net, Val: Route(RouteType, Cost: Option<i32>, ForwardingOption)
 //Used as values of the forwarding table hashmap held by nodes
 #[derive(Debug)]
 pub struct Route {
-    pub rtype: RouteType, //Indicates how route was learned
+    pub rtype: RouteType,           //Indicates how route was learned
     pub cost: Option<u32>, //Indicates cost of route (how many hops - important for lr REPL command) - cost can be unknown (for default route), hence the Option
     pub next_hop: ForwardingOption, //Contains all information needed to proceed with the routing process
 }
@@ -33,17 +36,17 @@ impl Route {
 //Used to indicate how a route was learned by the router (important for lr REPL command)
 #[derive(Debug)]
 pub enum RouteType {
-    Rip, //Learned via RIP
+    Rip,    //Learned via RIP
     Static, //Static routes - default route is the only one I can think of under normal circumstances
-    Local, //Routes to local interfaces - routes with a forwardingOption of Inter
+    Local,  //Routes to local interfaces - routes with a forwardingOption of Inter
     ToSelf, //Routes where data is passed directly to the node - are not officially routes (I guess) and do not need to be printed out when lr REPL command is run
 }
 
 #[derive(Debug, PartialEq)]
 pub enum ForwardingOption {
-    Ip(Ipv4Addr), //Forwarding to an IP address
+    Ip(Ipv4Addr),  //Forwarding to an IP address
     Inter(String), // Forwarding to an interface - the String is the name of the interface
-    ToSelf, // For package destined for current node
+    ToSelf,        // For package destined for current node
 }
 
 //Used to hold all the data that a node needs to know about a given interface
@@ -51,7 +54,7 @@ pub enum ForwardingOption {
 pub struct InterfaceRep {
     pub name: String, //Interface name
     pub v_net: Ipv4Net,
-    pub status: InterfaceStatus, //Interface status
+    pub status: InterfaceStatus,         //Interface status
     pub neighbors: Vec<(Ipv4Addr, u16)>, //List of the interface's neighbors in (ipaddr, udpport) form
     pub chan: BiChan<InterCmd, Packet>, //Channel to send and receive messages from associated interface (sends InterCmd and receives Packet)
 }
@@ -61,7 +64,7 @@ impl InterfaceRep {
         name: String,
         v_net: Ipv4Net,
         neighbors: Vec<(Ipv4Addr, u16)>,
-        chan: BiChan<InterCmd, Packet>
+        chan: BiChan<InterCmd, Packet>,
     ) -> InterfaceRep {
         InterfaceRep {
             name,
@@ -88,8 +91,8 @@ pub enum InterfaceStatus {
 #[derive(Debug)]
 pub enum InterCmd {
     BuildSend(PacketBasis, Ipv4Addr), //Build a packet using this PacketBasis and send it - when a send REPL command is used
-    Send(Packet, Ipv4Addr), //Send this packet - when a packet is being forwarded
-    ToggleStatus, //Make status down if up or up if down
+    Send(Packet, Ipv4Addr),           //Send this packet - when a packet is being forwarded
+    ToggleStatus,                     //Make status down if up or up if down
 }
 
 //Used to store the data an interface needs to build a packet and send it
@@ -119,7 +122,7 @@ impl Interface {
         udp_addr: Ipv4Addr,
         udp_port: u16,
         neighbors: HashMap<Ipv4Addr, u16>,
-        chan: BiChan<Packet, InterCmd>
+        chan: BiChan<Packet, InterCmd>,
     ) -> Interface {
         Interface {
             name,
@@ -132,43 +135,48 @@ impl Interface {
             status: InterfaceStatus::Up, //Status always starts as Up
         }
     }
-    pub fn run(self) -> () {
-        //Create mutexes to protect self
-        let self_mutex1 = Arc::new(Mutex::new(self));
-        let self_mutex2 = Arc::clone(&self_mutex1);
-
-        //Listen for commands from the almighty node
-        thread::spawn(move || Interface::node_listen(self_mutex1));
-        //Listen for packets coming out of the ether-void
-        Interface::ether_listen(self_mutex2);
-    }
-    fn node_listen(slf_mutex: Arc<Mutex<Interface>>) -> () {
-        let mut slf = slf_mutex.lock().unwrap();
-        loop { 
-            let chan_res = slf.chan.recv.recv();
-            match chan_res {
-                Ok(InterCmd::BuildSend(pb, next_hop)) => { 
-                    let builded = slf.build(pb);
-                    slf.send(builded, next_hop).expect("Error sending packet") 
-                }
-                Ok(InterCmd::Send(pack, next_hop)) => slf.send(pack, next_hop).expect("Error sending packet"),
-                Ok(InterCmd::ToggleStatus) => slf.toggle_status(),
-                Err(e) => panic!("Error receiving on channel: {e:?}")
-            }
-        }
-    } 
-    fn ether_listen(slf_mutex: Arc<Mutex<Interface>>) -> () {
-        let mut slf = slf_mutex.lock().unwrap();
+    pub fn run(mut self) -> () {
+        let mut udp_sock = UdpSocket::bind(format!("127.0.0.1:{}", self.udp_port)).expect("Unable to bind to port");
+        udp_sock.set_nonblocking(true).unwrap();
         loop {
-            match slf.status {
-                InterfaceStatus::Up => { 
-                    let pack = slf.recv().expect("Error receiving packet");
-                    slf.pass_packet(pack).expect("Channel to almighty node disconnected");
-                },
-                InterfaceStatus::Down => {} //Avoids busy waiting
-            }
+            self.node_listen(&mut udp_sock);
+            self.ether_listen(&mut udp_sock);
         }
     }
+    fn node_listen(&mut self, udp_sock: &mut UdpSocket) -> () {
+        let chan_res = self.chan.recv.try_recv();
+        match chan_res {
+            Ok(InterCmd::BuildSend(pb, next_hop)) => {
+                if let InterfaceStatus::Up = self.status {
+                    let builded = self.build(pb);
+                    self.send(udp_sock, builded, next_hop).expect("Error sending packet");
+                }
+            }
+            Ok(InterCmd::Send(pack, next_hop)) => {
+                if let InterfaceStatus::Up = self.status {
+                    self.send(udp_sock, pack, next_hop).expect("Error sending packet");
+                }
+            }
+            Ok(InterCmd::ToggleStatus) => self.toggle_status(),
+            Err(TryRecvError::Empty) => {},
+            Err(TryRecvError::Disconnected) => panic!("Channel to node disconnected :("),
+        }
+    }
+    fn ether_listen(&self, udp_sock: &mut UdpSocket) -> () {
+        match self.status {
+            InterfaceStatus::Up => {
+                let pack = match self.try_recv(udp_sock) {
+                    Ok(pack) => pack,
+                    Err(ref e) if e.kind() == ErrorKind::WouldBlock => return,
+                    Err(e) => panic!("Error while trying to recv: {e:?}")
+                };
+                self.pass_packet(pack)
+                    .expect("Channel to almighty node disconnected");
+            }
+            InterfaceStatus::Down => {}
+        }
+    }
+    //Fix this upon failure
     fn toggle_status(&mut self) -> () {
         match self.status {
             InterfaceStatus::Up => {
@@ -179,17 +187,12 @@ impl Interface {
             }
         }
     }
-    fn build(&mut self, pb: PacketBasis) -> Packet {
-        // TODO: ADD BUILDING RIP PACKETS   
-
-
-
-
+    fn build(&self, pb: PacketBasis) -> Packet {
         // Grabbing info from sending interface for header
         let src_ip = self.v_ip;
         let dst_ip = pb.dst_ip;
         let ttl: u8 = 16; // Default TTL from handout
-        // Instantiate payload
+                          // Instantiate payload
         let payload: Vec<u8> = Vec::from(pb.msg.as_bytes());
         // Create the header
         let mut header = Ipv4Header {
@@ -202,54 +205,52 @@ impl Interface {
         };
         // Checksum
         header.header_checksum = header.calc_header_checksum();
-        return Packet { header, data: payload }; // Packet built!
+        return Packet {
+            header,
+            data: payload,
+        }; // Packet built!
     }
-    pub fn send(&mut self, pack: Packet, next_hop: Ipv4Addr) -> std::io::Result<()> {
+    pub fn send(&self, sock: &mut UdpSocket, pack: Packet, next_hop: Ipv4Addr) -> std::io::Result<()> {
         // Grab neighbor address to send to
         let dst_neighbor = self.neighbors.get(&next_hop).unwrap();
-        // Self address for binding
-        let bind_addr = format!("127.0.0.1:{}", self.udp_port);
-        // Bind to Udp port and attempt to send to neighbor
-        let sock = UdpSocket::bind(bind_addr)?;
-
-        match sock.send_to(&pack.data, format!("127.0.0.1:{}", dst_neighbor)) {
+        let mut message = vec![0u8; 20];
+        let mut writer = &mut message[..];
+        pack.header.write(&mut writer)?;
+        message.extend(pack.data);
+        match sock.send_to(&message, format!("127.0.0.1:{}", dst_neighbor)) {
             // TODO: Do something on Ok? Make error more descriptive?
             Ok(_) => Ok(()),
             Err(e) => Err(e),
         }
     }
-    pub fn recv(&mut self) -> Result<Packet> {
+    pub fn try_recv(&self, socket: &mut UdpSocket) -> Result<Packet> {
         let mut received = false;
-        match UdpSocket::bind(format!("127.0.0.1:{}", self.udp_port)) {
-            Ok(socket) => {
-                let mut buf: [u8; 40] = [0; 40];
-                while !received {
-                    let len = socket.recv(&mut buf)?; // Break if receive
-                    if len != 0 {
-                        received = !received;
-                    }
-                }
-                match Ipv4Header::from_slice(&buf) {
-                    Ok((head, rest)) => {
-                        let len = (head.total_len - 20) as usize;
-                        let pay: Vec<u8> = Vec::from_iter(rest[0..len].iter().cloned());
-                        return Ok(Packet { header: head, data: pay });
-                    }
-                    Err(_) => {
-                        return Err(
-                            Error::new(
-                                ErrorKind::InvalidData,
-                                "Failed to read received packet error"
-                            )
-                        );
-                    }
-                }
+        let mut buf: [u8; 1500] = [0; 1500];
+        while !received {
+            let len = socket.recv(&mut buf)?; // Break if receive
+            if len != 0 {
+                received = !received;
             }
-            Err(e) => Err(e),
+        }
+        match Ipv4Header::from_slice(&buf) {
+            Ok((head, rest)) => {
+                let len = (head.total_len - 20) as usize;
+                let pay: Vec<u8> = Vec::from_iter(rest[0..len].iter().cloned());
+                return Ok(Packet {
+                    header: head,
+                    data: pay,
+                });
+            }
+            Err(_) => {
+                return Err(Error::new(
+                    ErrorKind::InvalidData,
+                    "Failed to read received packet error",
+                ));
+            }
         }
     }
-    fn pass_packet(&mut self, pack: Packet) -> result::Result<(), SendError<Packet>> {
-        self.chan.send.send(pack) 
+    fn pass_packet(&self, pack: Packet) -> result::Result<(), SendError<Packet>> {
+        self.chan.send.send(pack)
     }
 }
 
@@ -294,7 +295,7 @@ impl TrieNode {
     pub fn search(&mut self, dst: &Ipv4Addr) -> Result<String> {
         let node = self;
         let dst_oct = dst.octets(); // Get destination address octets
-        // Keep track of last available route
+                                    // Keep track of last available route
         let mut last_route: Option<String> = None;
 
         for oct in dst_oct {
@@ -311,7 +312,10 @@ impl TrieNode {
         match last_route {
             Some(route) => Ok(route),
             // Error fuckery
-            None => Err(Error::new(ErrorKind::Other, "Could not construct a valid route match")),
+            None => Err(Error::new(
+                ErrorKind::Other,
+                "Could not construct a valid route match",
+            )),
         }
     }
 }
