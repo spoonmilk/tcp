@@ -1,9 +1,6 @@
-use crate::{prelude::*, rip_utils::RipMsg};
+use crate::prelude::*;
 use std::io::{Error, ErrorKind};
-use std::mem;
 use std::net::UdpSocket;
-use std::sync::RwLock;
-use std::time::Duration;
 
 /*
 INCREDIBLY CONFUSING CHART OF FWDING TABLE STRUCTURE INTENDED TO MAKE SAID STRUCTURE LESS CONFUSING
@@ -16,7 +13,7 @@ Key: Ipv4Net, Val: Route(RouteType, Cost: Option<i32>, ForwardingOption)
 */
 
 //Used as values of the forwarding table hashmap held by nodes
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Route {
     pub rtype: RouteType,           //Indicates how route was learned
     pub cost: Option<u32>, //Indicates cost of route (how many hops - important for lr REPL command) - cost can be unknown (for default route), hence the Option
@@ -34,7 +31,7 @@ impl Route {
 }
 
 //Used to indicate how a route was learned by the router (important for lr REPL command)
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum RouteType {
     Rip,    //Learned via RIP
     Static, //Static routes - default route is the only one I can think of under normal circumstances
@@ -42,7 +39,7 @@ pub enum RouteType {
     ToSelf, //Routes where data is passed directly to the node - are not officially routes (I guess) and do not need to be printed out when lr REPL command is run
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum ForwardingOption {
     Ip(Ipv4Addr),  //Forwarding to an IP address
     Inter(String), // Forwarding to an interface - the String is the name of the interface
@@ -90,7 +87,7 @@ pub enum InterfaceStatus {
 //Used for messages that a node sends to an interface
 #[derive(Debug)]
 pub enum InterCmd {
-    BuildSend(PacketBasis, Ipv4Addr), //Build a packet using this PacketBasis and send it - when a send REPL command is used
+    BuildSend(PacketBasis, Ipv4Addr, bool), //Build a packet using this PacketBasis and send it - when a send REPL command is used
     Send(Packet, Ipv4Addr),           //Send this packet - when a packet is being forwarded
     ToggleStatus,                     //Make status down if up or up if down
 }
@@ -146,9 +143,9 @@ impl Interface {
     fn node_listen(&mut self, udp_sock: &mut UdpSocket) -> () {
         let chan_res = self.chan.recv.try_recv();
         match chan_res {
-            Ok(InterCmd::BuildSend(pb, next_hop)) => {
+            Ok(InterCmd::BuildSend(pb, next_hop, msg_type)) => {
                 if let InterfaceStatus::Up = self.status {
-                    let builded = self.build(pb);
+                    let builded = self.build(pb, msg_type);
                     self.send(udp_sock, builded, next_hop).expect("Error sending packet");
                 }
             }
@@ -187,20 +184,21 @@ impl Interface {
             }
         }
     }
-    fn build(&self, pb: PacketBasis) -> Packet {
+    fn build(&self, pb: PacketBasis, msg_type: bool) -> Packet {
         // Grabbing info from sending interface for header
         let src_ip = self.v_ip;
         let dst_ip = pb.dst_ip;
         let ttl: u8 = 16; // Default TTL from handout
                           // Instantiate payload
         let payload: Vec<u8> = Vec::from(pb.msg.as_bytes());
+        let prot_num: IpNumber = if msg_type { 0.into() } else { 200.into() };
         // Create the header
         let mut header = Ipv4Header {
             source: src_ip.octets(),
             destination: dst_ip.octets(),
             time_to_live: ttl,
             total_len: Ipv4Header::MIN_LEN_U16 + (pb.msg.len() as u16),
-            protocol: IpNumber::UDP,
+            protocol: prot_num,
             ..Default::default()
         };
         // Checksum

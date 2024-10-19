@@ -5,9 +5,9 @@ const INF: u32 = 16;
 
 #[derive(Debug, Clone)]
 pub struct RipMsg {
-    command: u16, // 1 for routing request, 2 for response
-    num_entries: u16, // 0 for request, < than 64
-    routes: Vec<RipRoute>, // As long as num_entries
+    pub command: u16, // 1 for routing request, 2 for response
+    pub num_entries: u16, // 0 for request, < than 64
+    pub routes: Vec<RipRoute>, // As long as num_entries
 }
 
 impl RipMsg {
@@ -140,12 +140,5 @@ pub fn route_update(rip_rt: RipRoute, fwd_table: &mut HashMap<Ipv4Net, Route>) {
         }
     } else {
         fwd_table.insert(rip_net, rip_to_route(rip_rt));
-    }
-}
-
-/// Updates a node's RIP table according to a RIP message
-pub fn update_fwd_table(rip_msg: RipMsg, fwd_table: &mut HashMap<Ipv4Net, Route>) {
-    for route in rip_msg.routes {
-        route_update(route, fwd_table);
     }
 }
