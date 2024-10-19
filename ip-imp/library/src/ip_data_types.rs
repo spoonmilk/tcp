@@ -310,8 +310,8 @@ impl Node {
     }*/
     /// Take in a packet destined for the current node and display information from it
     fn process_packet(&self, pack: Packet) -> () {
-        let src = String::from_utf8(Vec::from(pack.header.source)).unwrap();
-        let dst = String::from_utf8(Vec::from(pack.header.destination)).unwrap();
+        let src = Node::string_ip(pack.header.source);
+        let dst = Node::string_ip(pack.header.destination);
         let ttl = pack.header.time_to_live;
         let msg = String::from_utf8(pack.data).unwrap();
         let retstr = format!(
@@ -320,6 +320,9 @@ impl Node {
         );
         println!("{}", retstr);
         // Logic for editing fwd table
+    }
+    fn string_ip(raw_ip: [u8; 4]) -> String {
+        Vec::from(raw_ip).iter().map(|num| num.to_string()).collect::<Vec<String>>().join(".")
     }
     /*
     fn send_rip(&mut self, fwd_table: &mut HashMap<Ipv4Net, Route>, dst: Ipv4Addr, command: u16) -> () {
