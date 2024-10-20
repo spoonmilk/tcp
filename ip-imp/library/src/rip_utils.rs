@@ -38,9 +38,7 @@ impl RipRoute {
     }
 }
 
-pub struct RipPacket {
-
-}
+pub struct RipPacket {}
 
 // Methods we need
 
@@ -53,15 +51,26 @@ pub struct RipPacket {
 // Things we should add
 // New Node field
 
-pub fn table_to_rip(forwarding_table: &mut HashMap<Ipv4Net, Route>, rip_command: u16, dst: Ipv4Addr) -> RipMsg {
+pub fn table_to_rip(
+    forwarding_table: &mut HashMap<Ipv4Net, Route>,
+    neighbor_table: &HashMap<Ipv4Addr, Vec<Route>>,
+    rip_command: u16,
+    dst: Ipv4Addr
+) -> RipMsg {
     let mut routes = Vec::new();
+    let exclude_route = neighbor_table.get(&dst);
+
     for (net, route) in forwarding_table {
-        if net.addr() == dst { 
+        if net.addr() == dst {
             routes.push(RipRoute::new(INF, net.network().into(), net.netmask().into()));
-        }
-        match route.cost {
-            Some(cost) => routes.push(RipRoute::new(cost, net.network().into(), net.netmask().into())),
-            None => routes.push(RipRoute::new(0, net.network().into(), net.netmask().into())),
+        } else if exclude_route.unwrap().contains(route) {
+            routes.push(RipRoute::new(INF, net.network().into(), net.netmask().into()));
+        } else {
+            match route.cost {
+                Some(cost) =>
+                    routes.push(RipRoute::new(cost, net.network().into(), net.netmask().into())),
+                None => routes.push(RipRoute::new(0, net.network().into(), net.netmask().into())),
+            }
         }
     }
     RipMsg::new(rip_command, routes.len() as u16, routes)
@@ -99,19 +108,23 @@ pub fn deserialize_rip(buf: &[u8]) -> RipMsg {
     }
     rip_msg
 }
-
-fn check_rip_validity(rip_msg: &RipMsg) -> bool {
-    if rip_msg.command != 1 || rip_msg.command != 2 {
-        false
-    } else if rip_msg.num_entries > rip_msg.routes.len() as u16 {
-        false
-    } else {
-        true
-    }
-}
-
-fn rip_to_route (rip_msg: RipRoute) -> Route {
-    Route::new(RouteType::Rip, Some(rip_msg.cost), ForwardingOption::Ip(Ipv4Addr::from(rip_msg.address)))
+// 
+// fn check_rip_validity(rip_msg: &RipMsg) -> bool {
+//     if rip_msg.command != 1 || rip_msg.command != 2 {
+//         false
+//     } else if rip_msg.num_entries > (rip_msg.routes.len() as u16) {
+//         false
+//     } else {
+//         true
+//     }
+// }
+// 
+fn rip_to_route(rip_msg: RipRoute) -> Route {
+    Route::new(
+        RouteType::Rip,
+        Some(rip_msg.cost),
+        ForwardingOption::Ip(Ipv4Addr::from(rip_msg.address))
+    )
 }
 
 /// Updates an entry in a node's RIP table according to a RIP route
@@ -135,7 +148,7 @@ pub fn route_update(rip_rt: RipRoute, fwd_table: &mut HashMap<Ipv4Net, Route>) {
                         fwd_table.insert(rip_net, rip_to_route(rip_rt));
                     }
                 }
-            }, 
+            }
             None => (), // Route is to self, do nothing
         }
     } else {

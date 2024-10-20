@@ -80,9 +80,17 @@ pub fn initialize(config_info: IPConfig) -> Result<Node> {
     add_static_routes(&mut forwarding_table, config_info.static_routes);
     add_local_routes(&mut forwarding_table, &interfaces);
     add_toself_routes(&mut forwarding_table, &interfaces);
+
+    // Create RIP neighbors table
+    let mut rip_table: HashMap<Ipv4Addr, Vec<Route>> = HashMap::new();
+    match config_info.rip_neighbors {
+        Some(rip_neighbors) => add_rip_neighbors(&mut rip_table, rip_neighbors),
+        None => ()
+    }
+
     //Create and return node
     println!("{forwarding_table:?}");
-    let node = Node::new(n_type, interfaces, interface_reps, forwarding_table, HashMap::new()); //PLACEHOLDER for now; FIX later
+    let node = Node::new(n_type, interfaces, interface_reps, forwarding_table, rip_table); //PLACEHOLDER for now; FIX later
     Ok(node)
 }
 
@@ -98,6 +106,15 @@ fn add_static_routes(
         );
         fwd_table.insert(net_prefix.clone(), new_route);
     }
+}
+
+fn add_rip_neighbors(
+    rip_table: &mut HashMap<Ipv4Addr, Vec<Route>>,
+    rip_neighbors: Vec<Ipv4Addr>
+) -> () {
+    for neighbor in rip_neighbors {
+        rip_table.insert(neighbor, Vec::new());
+    }   
 }
 
 fn add_local_routes(fwd_table: &mut HashMap<Ipv4Net, Route>, interfaces: &Vec<Interface>) -> () {

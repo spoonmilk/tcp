@@ -16,7 +16,7 @@ pub struct Node {
     interfaces: Vec<Interface>, //Is depleted upon startup when all interface threads are spawned - use interface_reps to find information about each interface
     interface_reps: HashMap<String, InterfaceRep>, //Maps an interface's name to its associated InterfaceRep
     forwarding_table: HashMap<Ipv4Net, Route>,
-    rip_neighbors: HashMap<Ipv4Addr, Route>,
+    rip_neighbors: HashMap<Ipv4Addr, Vec<Route>>, // Stores route information learned about from neighbors
     // RIP neighbors vec
     // Timeout table(?)
 }
@@ -27,7 +27,7 @@ impl Node {
         interfaces: Vec<Interface>,
         interface_reps: HashMap<String, InterfaceRep>,
         forwarding_table: HashMap<Ipv4Net, Route>,
-        rip_neighbors: HashMap<Ipv4Addr, Route>,
+        rip_neighbors: HashMap<Ipv4Addr, Vec<Route>>,
     ) -> Node {
         Node {
             n_type,
@@ -194,11 +194,11 @@ impl Node {
             Ok(None) => panic!("Packet sent to self"), //FIX THIS LATER
             Err(e) => return println!("\nForwarding table entry for address not found: {e:?}")
         };
-        if msg_type {
+        if msg_type { // For Test Packets
             inter_rep
             .command(InterCmd::BuildSend(pb, next_hop, true))
             .expect("Error sending connecting to interface or sending packet"); //COULD BE MORE ROBUST
-        } else {
+        } else { // For RIP
             inter_rep
             .command(InterCmd::BuildSend(pb, next_hop, false))
             .expect("Error sending connecting to interface or sending packet"); //COULD BE MORE ROBUST
@@ -319,7 +319,7 @@ impl Node {
     fn process_packet(&mut self, pack: Packet) -> () {
         let src = Node::string_ip(pack.header.source);
         let dst = Node::string_ip(pack.header.destination);
-        let dst_ip: Ipv4Addr = pack.header.destination.into();
+        let src_ip: Ipv4Addr = pack.header.source.into();
         let ttl = pack.header.time_to_live;
         
         match pack.header.protocol {
@@ -335,10 +335,10 @@ impl Node {
                 // Edit the forwarding table
                 match rip_msg.command {
                     1 => {  // Received a routing request
-                        self.send_rip(&mut self.forwarding_table, dst_ip, 2);
+                        self.send_rip(src_ip, 2); // Send a routing response
                     }
-                    2 => {
-                        self.update_fwd_table(rip_msg);
+                    2 => { // Received a routing response
+                        self.update_fwd_table(rip_msg); // Update the forwarding table according to the response
                     }
                     _ => panic!("Unsupported RIP command received"),
                 }
@@ -350,7 +350,7 @@ impl Node {
     fn string_ip(raw_ip: [u8; 4]) -> String {
         Vec::from(raw_ip).iter().map(|num| num.to_string()).collect::<Vec<String>>().join(".")
     }
-    fn send_rip(&mut self, fwd_table: &mut HashMap<Ipv4Net, Route>, dst: Ipv4Addr, command: u16) -> () {
+    fn send_rip(&mut self, dst: Ipv4Addr, command: u16) -> () {
         match command {
             1 => { // Send a routing request
                 let rip_req_msg: RipMsg = RipMsg::new(1, 0, Vec::new());
@@ -358,16 +358,18 @@ impl Node {
                 self.send(dst.to_string(), String::from_utf8(ser_req_rip).unwrap(), false);
             }
             2 => { // Send a routing response
-                let rip_resp_msg: RipMsg = table_to_rip(fwd_table, 1, dst);
+                let rip_resp_msg: RipMsg = table_to_rip(&mut self.forwarding_table, &self.rip_neighbors, 1, dst);
                 let ser_resp_rip: Vec<u8> = serialize_rip(rip_resp_msg);
                 self.send(dst.to_string(), String::from_utf8(ser_resp_rip).unwrap(), false);
             }
             _ => panic!("Invalid RIP command type!"),
         }
     }
-    fn rip_respond(&mut self) -> () {
-        // TODO: Split horizon/poison reverse adding
-
+    fn rip_broadcast(&mut self) -> () { // For periodic and triggered updates
+        let keys: Vec<Ipv4Addr> = self.rip_neighbors.keys().cloned().collect(); // So tired of this ownership bullshit
+        for addr in keys {
+            self.send_rip(addr, 1);
+        }
     }
     /// Updates a node's RIP table according to a RIP message
     fn update_fwd_table(&mut self, rip_msg: RipMsg) {

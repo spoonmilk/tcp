@@ -1,6 +1,5 @@
 use crate::prelude::*;
 use std::io::{Error, ErrorKind};
-use std::net::UdpSocket;
 
 /*
 INCREDIBLY CONFUSING CHART OF FWDING TABLE STRUCTURE INTENDED TO MAKE SAID STRUCTURE LESS CONFUSING
