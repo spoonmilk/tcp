@@ -2,7 +2,6 @@ use crate::prelude::*;
 use crate::utils::*;
 
 const INF: u32 = 16;
-
 #[derive(Debug, Clone)]
 pub struct RipMsg {
     pub command: u16, // 1 for routing request, 2 for response

@@ -1,8 +1,10 @@
 use crate::prelude::*;
 use crate::rip_utils::*;
 use crate::utils::*;
+use core::net;
 use std::io::{Error, ErrorKind};
 use std::mem;
+use std::time::Duration;
 
 #[derive(Debug, Clone)]
 pub enum NodeType {
@@ -51,8 +53,12 @@ impl Node {
         //Define mutex to protect self - although each tokio "thread" runs asynchronously instead of concurrently, mutexes are still needed (despite what I originally thought)
         let self_mutex1 = Arc::new(Mutex::new(self));
         let self_mutex2 = Arc::clone(&self_mutex1);
+        let self_mutex3 = Arc::clone(&self_mutex2);
+        let self_mutex4 = Arc::clone(&self_mutex3);
         //Listen for REPL prompts from REPL thread and handle them
         thread::spawn(move || Node::repl_listen(self_mutex1, recv_rchan));
+        thread::spawn(move || Node::rip_go(self_mutex3));
+        thread::spawn(move || Node::run_table_check(self_mutex4));
         //Listen for messages from interfaces and handle them
         Node::interface_listen(self_mutex2);
     }
@@ -69,6 +75,42 @@ impl Node {
                 Ok(CmdType::Down(inter)) => slf.down(inter),
                 Ok(CmdType::Send(addr, msg)) => slf.send(addr, msg, true),
                 Err(e) => panic!("Error receiving from repl channel: {e:?}"),
+            }
+        }
+    }
+    /// Periodically broadcasts RIP updates
+    fn rip_go(slf_mutex: Arc<Mutex<Node>>) {
+        loop {
+            thread::sleep(Duration::from_secs(5));
+            let mut slf = slf_mutex.lock().unwrap();
+            slf.rip_broadcast();
+        }
+    }
+    /// Periodically checks the entries of the forwarding table
+    fn run_table_check(slf_mutex: Arc<Mutex<Node>>) {
+        loop {
+            // Get relevant checking variables then drop for wait
+            let slf= slf_mutex.lock().unwrap();
+            let old_table = slf.forwarding_table.clone();
+            std::mem::drop(slf); // Drop for wait, let's not block the others!
+            // Wait for time to pass
+            thread::sleep(Duration::from_secs(12));
+            // Now check the similarity of the two
+            let mut slf = slf_mutex.lock().unwrap();
+            for (v_net, route) in &old_table {
+                // If a route has been changed
+                let new_route = slf.forwarding_table.get(v_net).unwrap();
+                let new_route_rtype = route.rtype.clone();
+                let new_route_dest = route.next_hop.clone();
+                let net = v_net.clone();
+
+                if new_route != route {
+                    // Insert, update, remove
+                    let replace = Route::new(new_route_rtype, Some(16), new_route_dest);
+                    slf.forwarding_table.insert(net, replace);
+                    slf.rip_broadcast();
+                    slf.forwarding_table.remove(&net);
+                }
             }
         }
     }
@@ -339,6 +381,7 @@ impl Node {
                     }
                     2 => { // Received a routing response
                         self.update_fwd_table(rip_msg); // Update the forwarding table according to the response
+                        self.rip_broadcast(); // Broadcast the new routing table
                     }
                     _ => panic!("Unsupported RIP command received"),
                 }
@@ -368,8 +411,11 @@ impl Node {
     fn rip_broadcast(&mut self) -> () { // For periodic and triggered updates
         let keys: Vec<Ipv4Addr> = self.rip_neighbors.keys().cloned().collect(); // So tired of this ownership bullshit
         for addr in keys {
-            self.send_rip(addr, 1);
+            self.send_rip(addr, 2);
         }
+    }
+    fn rip_request(&mut self, dst: Ipv4Addr) -> () {
+        self.send_rip(dst, 1);
     }
     /// Updates a node's RIP table according to a RIP message
     fn update_fwd_table(&mut self, rip_msg: RipMsg) {
