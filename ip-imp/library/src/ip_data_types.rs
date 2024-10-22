@@ -5,7 +5,7 @@ use std::io::{Error, ErrorKind};
 use std::mem;
 use std::time::Duration;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum NodeType {
     Router,
     Host,
@@ -41,6 +41,8 @@ impl Node {
 
     /// Runs the node and spawns interfaces
     pub fn run(mut self, recv_rchan: Receiver<CmdType>) -> () {
+        let my_type = self.n_type.clone();
+
         //STARTUP TASKS
         //Spawn all interfaces - interfaces is DEPLETED after this and unusable
         let interfaces = mem::take(&mut self.interfaces);
@@ -59,10 +61,15 @@ impl Node {
         let self_mutex4 = Arc::clone(&self_mutex3);
         //Listen for REPL prompts from REPL thread and handle them
         thread::spawn(move || Node::repl_listen(self_mutex1, recv_rchan));
-        thread::spawn(move || Node::rip_go(self_mutex3));
-        thread::spawn(move || Node::run_table_check(self_mutex4));
+
+
+        if my_type == NodeType::Router {
+            thread::spawn(move || Node::rip_go(self_mutex2));
+            thread::spawn(move || Node::run_table_check(self_mutex3));
+        }
+        
         //Listen for messages from interfaces and handle them
-        Node::interface_listen(self_mutex2);
+        Node::interface_listen(self_mutex4);
     }
     /// Listen for REPL commands to the node
     fn repl_listen(slf_mutex: Arc<Mutex<Node>>, recv_rchan: Receiver<CmdType>) -> () {
@@ -91,29 +98,30 @@ impl Node {
     /// Periodically checks the entries of the forwarding table
     fn run_table_check(slf_mutex: Arc<Mutex<Node>>) {
         loop {
-            // Get relevant checking variables then drop for wait
-            let slf= slf_mutex.lock().unwrap();
-            let old_table = slf.forwarding_table.clone();
-            std::mem::drop(slf); // Drop for wait, let's not block the others!
+            // // Get relevant checking variables then drop for wait
+            // let slf= slf_mutex.lock().unwrap();
+            // let old_table = slf.forwarding_table.clone();
+            // std::mem::drop(slf); // Drop for wait, let's not block the others!
             // Wait for time to pass
             thread::sleep(Duration::from_secs(12));
             // Now check the similarity of the two
-            let mut slf = slf_mutex.lock().unwrap();
-            for (v_net, route) in &old_table {
-                // If a route has been changed
-                let new_route = slf.forwarding_table.get(v_net).unwrap();
-                let new_route_rtype = route.rtype.clone();
-                let new_route_dest = route.next_hop.clone();
-                let net = v_net.clone();
+            let slf = slf_mutex.lock().unwrap();
+            println!("Checking forwarding table of len {}" , slf.forwarding_table.len());
+            // for (v_net, route) in &old_table {
+            //     // If a route has been changed
+            //     let new_route = slf.forwarding_table.get(v_net).unwrap();
+            //     let new_route_rtype = route.rtype.clone();
+            //     let new_route_dest = route.next_hop.clone();
+            //     let net = v_net.clone();
 
-                if new_route != route {
-                    // Insert, update, remove
-                    let replace = Route::new(new_route_rtype, Some(16), new_route_dest);
-                    slf.forwarding_table.insert(net, replace);
-                    slf.rip_broadcast();
-                    slf.forwarding_table.remove(&net);
-                }
-            }
+            //     if new_route != route {
+            //         // Insert, update, remove
+            //         let replace = Route::new(new_route_rtype, Some(16), new_route_dest);
+            //         slf.forwarding_table.insert(net, replace);
+            //         slf.rip_broadcast();
+            //         slf.forwarding_table.remove(&net);
+            //     }
+            // }
         }
     }
     /// Listen for messages on node interfaces
