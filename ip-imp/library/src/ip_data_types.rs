@@ -1,7 +1,6 @@
 use crate::prelude::*;
 use crate::rip_utils::*;
 use crate::utils::*;
-use core::net;
 use std::io::{Error, ErrorKind};
 use std::mem;
 use std::time::Duration;
@@ -48,6 +47,9 @@ impl Node {
         for interface in interfaces {
             thread::spawn(move || interface.run());
         }
+
+        // Broadcast rip request to all neighbors
+        self.request_all();
 
         //ONGOING TASKS
         //Define mutex to protect self - although each tokio "thread" runs asynchronously instead of concurrently, mutexes are still needed (despite what I originally thought)
@@ -416,6 +418,12 @@ impl Node {
     }
     fn rip_request(&mut self, dst: Ipv4Addr) -> () {
         self.send_rip(dst, 1);
+    }
+    fn request_all(&mut self) -> () {
+        let keys: Vec<Ipv4Addr> = self.rip_neighbors.keys().cloned().collect(); // So tired of this ownership bullshit
+        for addr in keys {
+            self.rip_request(addr);
+        }
     }
     /// Updates a node's RIP table according to a RIP message
     fn update_fwd_table(&mut self, rip_msg: RipMsg) {
