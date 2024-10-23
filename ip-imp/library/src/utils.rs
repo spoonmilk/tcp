@@ -95,7 +95,7 @@ pub enum InterCmd {
 #[derive(Debug)]
 pub struct PacketBasis {
     pub dst_ip: Ipv4Addr,
-    pub msg: String,
+    pub msg: Vec<u8>,
 }
 
 #[derive(Debug)]
@@ -189,14 +189,14 @@ impl Interface {
         let dst_ip = pb.dst_ip;
         let ttl: u8 = 16; // Default TTL from handout
                           // Instantiate payload
-        let payload: Vec<u8> = Vec::from(pb.msg.as_bytes());
+        let payload: Vec<u8> = pb.msg;
         let prot_num: IpNumber = if msg_type { 0.into() } else { 200.into() };
         // Create the header
         let mut header = Ipv4Header {
             source: src_ip.octets(),
             destination: dst_ip.octets(),
             time_to_live: ttl,
-            total_len: Ipv4Header::MIN_LEN_U16 + (pb.msg.len() as u16),
+            total_len: Ipv4Header::MIN_LEN_U16 + (payload.len() as u16),
             protocol: prot_num,
             ..Default::default()
         };
@@ -214,6 +214,9 @@ impl Interface {
         let mut writer = &mut message[..];
         pack.header.write(&mut writer)?;
         message.extend(pack.data);
+
+
+        println!("Sending message with data: {:?}", String::from_utf8(message.clone()));
         match sock.send_to(&message, format!("127.0.0.1:{}", dst_neighbor)) {
             // TODO: Do something on Ok? Make error more descriptive?
             Ok(_) => Ok(()),

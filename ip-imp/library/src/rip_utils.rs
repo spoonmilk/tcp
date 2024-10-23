@@ -1,6 +1,7 @@
 use crate::prelude::*;
 use crate::utils::*;
 
+
 const INF: u32 = 16;
 #[derive(Debug, Clone)]
 pub struct RipMsg {
@@ -17,6 +18,7 @@ impl RipMsg {
             routes,
         }
     }
+    
 }
 
 #[derive(Debug, Clone)]
@@ -35,9 +37,8 @@ impl RipRoute {
             mask,
         }
     }
+    
 }
-
-pub struct RipPacket {}
 
 // Methods we need
 
@@ -77,19 +78,19 @@ pub fn table_to_rip(
 
 /// Serializes a RIP message to a vector of bytes
 pub fn serialize_rip(rip_msg: RipMsg) -> Vec<u8> {
-    let mut ret = Vec::new();
-    ret.extend_from_slice(&rip_msg.command.to_be_bytes());
-    ret.extend_from_slice(&rip_msg.num_entries.to_be_bytes());
+    let mut buf = Vec::new();
+    buf.extend_from_slice(&rip_msg.command.to_be_bytes());
+    buf.extend_from_slice(&rip_msg.num_entries.to_be_bytes());
     for route in rip_msg.routes {
-        ret.extend_from_slice(&route.cost.to_be_bytes());
-        ret.extend_from_slice(&route.address.to_be_bytes());
-        ret.extend_from_slice(&route.mask.to_be_bytes());
+        buf.extend_from_slice(&route.cost.to_be_bytes());
+        buf.extend_from_slice(&route.address.to_be_bytes());
+        buf.extend_from_slice(&route.mask.to_be_bytes());
     }
-    ret
+    buf
 }
 
 /// Takes in a vector of bytes and returns a RIP message
-pub fn deserialize_rip(buf: &[u8]) -> RipMsg {
+pub fn deserialize_rip(buf: Vec<u8>) -> RipMsg {
     let mut rip_msg = RipMsg::new(0, 0, Vec::new());
     let mut offset = 0;
     rip_msg.command = u16::from_be_bytes(buf[offset..offset + 2].try_into().unwrap());
@@ -105,11 +106,11 @@ pub fn deserialize_rip(buf: &[u8]) -> RipMsg {
         offset += 4;
         rip_msg.routes.push(RipRoute::new(cost, address, mask));
     }
-    rip_msg
+    rip_msg 
 }
 // 
 // fn check_rip_validity(rip_msg: &RipMsg) -> bool {
-//     if rip_msg.command != 1 || rip_msg.command != 2 {
+//     if rip_msg.command != 1 && rip_msg.command != 2 {
 //         false
 //     } else if rip_msg.num_entries > (rip_msg.routes.len() as u16) {
 //         false
