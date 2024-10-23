@@ -61,20 +61,23 @@ impl Node {
 
         //ONGOING TASKS
         //Define mutex to protect self - although each tokio "thread" runs asynchronously instead of concurrently, mutexes are still needed (despite what I originally thought)
-        let self_mutex1 = Arc::new(Mutex::new(self));
-        // let self_mutex2 = Arc::clone(&self_mutex1);
-        // let self_mutex3 = Arc::clone(&self_mutex2);
-        let self_mutex4 = Arc::clone(&self_mutex1);
+        let listen_mutex = Arc::new(Mutex::new(self));
+        let repl_mutex = Arc::clone(&listen_mutex);
         //Listen for REPL prompts from REPL thread and handle them
-        // if my_type == NodeType::Router {
-        //     thread::spawn(move || Node::rip_go(self_mutex2));
-        //     thread::spawn(move || Node::run_table_check(self_mutex3));    
-        // } 
-        thread::spawn(move || Node::repl_listen(self_mutex1, recv_rchan));
+        if my_type == NodeType::Router {
+            let rip_periodic = Arc::clone(&listen_mutex);
+            let timeout_check = Arc::clone(&listen_mutex);
+            thread::spawn(move || Node::rip_go(rip_periodic));
+            thread::spawn(move || Node::run_table_check(timeout_check));    
+        } 
+
+
+        thread::spawn(move || Node::repl_listen(repl_mutex, recv_rchan));
         
         //Listen for messages from interfaces and handle them
-        Node::interface_listen(self_mutex4);
+        Node::interface_listen(listen_mutex);
     }
+    
     /// Listen for REPL commands to the node
     fn repl_listen(slf_mutex: Arc<Mutex<Node>>, recv_rchan: Receiver<CmdType>) -> () {
         loop {
@@ -95,15 +98,15 @@ impl Node {
     fn rip_go(slf_mutex: Arc<Mutex<Node>>) {
         loop {
             thread::sleep(Duration::from_secs(5));
-            // println!("I should broadcast rip now!")
-            // let mut slf = slf_mutex.lock().unwrap();
-            // slf.rip_broadcast();
+            println!("Broadcasting RIP!");
+            let mut slf = slf_mutex.lock().unwrap();
+            slf.rip_broadcast();
         }
     }
     /// Periodically checks the entries of the forwarding table
     fn run_table_check(slf_mutex: Arc<Mutex<Node>>) {
         loop {
-            thread::sleep(Duration::from_secs(5));
+            thread::sleep(Duration::from_secs(12));
             // println!("I should check the table now!")
         }
     }
@@ -286,7 +289,6 @@ impl Node {
                 ForwardingOption::Ip(ip) => ip,
                 ForwardingOption::ToSelf => break Ok(None),
             };
-            println!("Current dst ip is {:?}", dst_ip);
         }
     }
     /// Check the validity of a packet
