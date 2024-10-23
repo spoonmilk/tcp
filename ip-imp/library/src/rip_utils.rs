@@ -53,28 +53,41 @@ impl RipRoute {
 
 pub fn table_to_rip(
     forwarding_table: &mut HashMap<Ipv4Net, Route>,
-    neighbor_table: &HashMap<Ipv4Addr, Vec<Route>>,
     rip_command: u16,
+    neighbor_routes: &mut HashMap<Ipv4Addr, Vec<Route>>,
     dst: Ipv4Addr
 ) -> RipMsg {
     let mut routes = Vec::new();
-    let exclude_route = neighbor_table.get(&dst);
-
     for (net, route) in forwarding_table {
-        if net.addr() == dst {
-            routes.push(RipRoute::new(INF, net.network().into(), net.netmask().into()));
-        } else if exclude_route.unwrap().contains(route) {
-            routes.push(RipRoute::new(INF, net.network().into(), net.netmask().into()));
-        } else {
-            match route.cost {
-                Some(cost) =>
-                    routes.push(RipRoute::new(cost, net.network().into(), net.netmask().into())),
-                None => routes.push(RipRoute::new(0, net.network().into(), net.netmask().into())),
-            }
+        match route.cost {
+            Some(cost) =>
+                routes.push(RipRoute::new(cost, net.network().into(), net.netmask().into())),
+            None => routes.push(RipRoute::new(0, net.network().into(), net.netmask().into())),
         }
     }
-    RipMsg::new(rip_command, routes.len() as u16, routes)
+    let my_routes = poison_routes(routes, neighbor_routes, dst);
+    RipMsg::new(rip_command, my_routes.len() as u16, my_routes)
 }
+
+
+fn poison_routes (routes: Vec<RipRoute>, neighbor_routes: &mut HashMap<Ipv4Addr, Vec<Route>>, dst: Ipv4Addr) -> Vec<RipRoute> {
+    let mut ret_routes: Vec<RipRoute> = Vec::new();
+    for route in routes {
+        if route.cost == 0 { // Locallllll
+            ret_routes.push(route);
+        }
+        else if route.address == dst.into() {
+            ret_routes.push(RipRoute::new(INF, route.address, route.mask));
+        } else if neighbor_routes.contains_key(&Ipv4Addr::from(route.address)) {
+            ret_routes.push(RipRoute::new(INF, route.address, route.mask));
+        } else {
+            ret_routes.push(route);
+        }
+
+    }
+    ret_routes
+}
+
 
 /// Serializes a RIP message to a vector of bytes
 pub fn serialize_rip(rip_msg: RipMsg) -> Vec<u8> {

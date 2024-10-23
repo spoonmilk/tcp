@@ -20,5 +20,5 @@ build:
 
 clean:
 	cargo clean --manifest-path $(VNODE_DIR)/Cargo.toml
-	rm $(ROOT_DIR)/vnode
-	rm $(ROOT_DIR)/vrouter
+	rm vhost
+	rm vrouter
