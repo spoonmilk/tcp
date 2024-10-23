@@ -129,8 +129,6 @@ pub fn route_update(rip_rt: &mut RipRoute, fwd_table: &mut HashMap<Ipv4Net, Rout
     ).unwrap(); 
 
     rip_rt.cost = rip_rt.cost + 1;
-
-    println!("Updating route with cost {} for network {}", rip_rt.cost, rip_net);
     
     if fwd_table.contains_key(&rip_net) {
         if fwd_table.get(&rip_net).unwrap().next_hop == ForwardingOption::ToSelf || rip_rt.cost == 0 {
@@ -155,5 +153,4 @@ pub fn route_update(rip_rt: &mut RipRoute, fwd_table: &mut HashMap<Ipv4Net, Rout
     } else {
         fwd_table.insert(rip_net, rip_to_route(rip_rt));
     }
-    println!("Updated route table: {fwd_table:?}");
 }

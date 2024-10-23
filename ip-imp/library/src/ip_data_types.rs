@@ -285,6 +285,7 @@ impl Node {
                 ForwardingOption::Ip(ip) => ip,
                 ForwardingOption::ToSelf => break Ok(None),
             };
+            println!("Current dst ip is {:?}", dst_ip);
         }
     }
     /// Check the validity of a packet
