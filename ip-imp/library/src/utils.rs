@@ -50,6 +50,7 @@ pub enum ForwardingOption {
 pub struct InterfaceRep {
     pub name: String, //Interface name
     pub v_net: Ipv4Net,
+    pub v_ip: Ipv4Addr,
     pub status: InterfaceStatus,         //Interface status
     pub neighbors: Vec<(Ipv4Addr, u16)>, //List of the interface's neighbors in (ipaddr, udpport) form
     pub chan: BiChan<InterCmd, Packet>, //Channel to send and receive messages from associated interface (sends InterCmd and receives Packet)
@@ -59,12 +60,14 @@ impl InterfaceRep {
     pub fn new(
         name: String,
         v_net: Ipv4Net,
+        v_ip: Ipv4Addr,
         neighbors: Vec<(Ipv4Addr, u16)>,
         chan: BiChan<InterCmd, Packet>,
     ) -> InterfaceRep {
         InterfaceRep {
             name,
             v_net,
+            v_ip,
             status: InterfaceStatus::Up, //Status always starts as Up
             neighbors,
             chan,
@@ -166,6 +169,7 @@ impl Interface {
                     Err(ref e) if e.kind() == ErrorKind::WouldBlock => return,
                     Err(e) => panic!("Error while trying to recv: {e:?}")
                 };
+                println!("Recieved packet, passing");
                 self.pass_packet(pack)
                     .expect("Channel to almighty node disconnected");
             }
@@ -215,8 +219,7 @@ impl Interface {
         pack.header.write(&mut writer)?;
         message.extend(pack.data);
 
-
-        println!("Sending message with data: {:?}", String::from_utf8(message.clone()));
+        // Send
         match sock.send_to(&message, format!("127.0.0.1:{}", dst_neighbor)) {
             // TODO: Do something on Ok? Make error more descriptive?
             Ok(_) => Ok(()),
@@ -230,11 +233,13 @@ impl Interface {
             let len = socket.recv(&mut buf)?; // Break if receive
             if len != 0 {
                 received = !received;
+                println!("Received {len} bytes");
             }
         }
         match Ipv4Header::from_slice(&buf) {
             Ok((head, rest)) => {
                 let len = (head.total_len - 20) as usize;
+                println!("Ipv4 packet received should be of length {}", len);
                 let pay: Vec<u8> = Vec::from_iter(rest[0..len].iter().cloned());
                 return Ok(Packet {
                     header: head,

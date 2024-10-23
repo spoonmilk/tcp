@@ -51,26 +51,7 @@ impl RipRoute {
 // Things we should add
 // New Node field
 
-pub fn table_to_rip(
-    forwarding_table: &mut HashMap<Ipv4Net, Route>,
-    rip_command: u16,
-    neighbor_routes: &mut HashMap<Ipv4Addr, Vec<Route>>,
-    dst: Ipv4Addr
-) -> RipMsg {
-    let mut routes = Vec::new();
-    for (net, route) in forwarding_table {
-        match route.cost {
-            Some(cost) =>
-                routes.push(RipRoute::new(cost, net.network().into(), net.netmask().into())),
-            None => routes.push(RipRoute::new(0, net.network().into(), net.netmask().into())),
-        }
-    }
-    let my_routes = poison_routes(routes, neighbor_routes, dst);
-    RipMsg::new(rip_command, my_routes.len() as u16, my_routes)
-}
-
-
-fn poison_routes (routes: Vec<RipRoute>, neighbor_routes: &mut HashMap<Ipv4Addr, Vec<Route>>, dst: Ipv4Addr) -> Vec<RipRoute> {
+pub fn poison_routes (routes: Vec<RipRoute>, neighbor_routes: &mut HashMap<Ipv4Addr, Vec<Route>>, dst: Ipv4Addr) -> Vec<RipRoute> {
     let mut ret_routes: Vec<RipRoute> = Vec::new();
     for route in routes {
         if route.cost == 0 { // Locallllll
@@ -132,7 +113,7 @@ pub fn deserialize_rip(buf: Vec<u8>) -> RipMsg {
 //     }
 // }
 // 
-fn rip_to_route(rip_msg: RipRoute) -> Route {
+fn rip_to_route(rip_msg: &mut RipRoute) -> Route {
     Route::new(
         RouteType::Rip,
         Some(rip_msg.cost),
@@ -141,15 +122,22 @@ fn rip_to_route(rip_msg: RipRoute) -> Route {
 }
 
 /// Updates an entry in a node's RIP table according to a RIP route
-pub fn route_update(rip_rt: RipRoute, fwd_table: &mut HashMap<Ipv4Net, Route>) {
+pub fn route_update(rip_rt: &mut RipRoute, fwd_table: &mut HashMap<Ipv4Net, Route>) {
     let rip_net = Ipv4Net::with_netmask(
         Ipv4Addr::from(rip_rt.address),
         Ipv4Addr::from(rip_rt.mask)
-    ).unwrap();
+    ).unwrap(); 
 
+    rip_rt.cost = rip_rt.cost + 1;
+
+    println!("Updating route with cost {} for network {}", rip_rt.cost, rip_net);
+    
     if fwd_table.contains_key(&rip_net) {
-        let prev_route = fwd_table.get(&rip_net).unwrap();
+        if fwd_table.get(&rip_net).unwrap().next_hop == ForwardingOption::ToSelf || rip_rt.cost == 0 {
+            panic!("Route to self should not be encountered in update")
+        }
 
+        let prev_route = fwd_table.get(&rip_net).unwrap();
         match prev_route.cost {
             Some(cost) => {
                 if cost > rip_rt.cost {
@@ -162,9 +150,10 @@ pub fn route_update(rip_rt: RipRoute, fwd_table: &mut HashMap<Ipv4Net, Route>) {
                     }
                 }
             }
-            None => (), // Route is to self, do nothing
+            None => panic!("Route cost should not be None"), // Route is to self, do nothing
         }
     } else {
         fwd_table.insert(rip_net, rip_to_route(rip_rt));
     }
+    println!("Updated route table: {fwd_table:?}");
 }
