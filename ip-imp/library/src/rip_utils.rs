@@ -113,43 +113,46 @@ pub fn deserialize_rip(buf: Vec<u8>) -> RipMsg {
 //     }
 // }
 // 
-fn rip_to_route(rip_msg: &mut RipRoute) -> Route {
+fn rip_to_route(rip_msg: &mut RipRoute, next_hop: &Ipv4Addr) -> Route {
     Route::new(
         RouteType::Rip,
         Some(rip_msg.cost),
-        ForwardingOption::Ip(Ipv4Addr::from(rip_msg.address))
+        ForwardingOption::Ip(next_hop.clone())//Ipv4Addr::from(rip_msg.address))
     )
 }
 
 /// Updates an entry in a node's RIP table according to a RIP route
-pub fn route_update(rip_rt: &mut RipRoute, fwd_table: &mut HashMap<Ipv4Net, Route>) {
+pub fn route_update(rip_rt: &mut RipRoute, fwd_table: &mut HashMap<Ipv4Net, Route>, next_hop: &Ipv4Addr) {
     let rip_net = Ipv4Net::with_netmask(
         Ipv4Addr::from(rip_rt.address),
         Ipv4Addr::from(rip_rt.mask)
-    ).unwrap(); 
-
+    ).unwrap().trunc(); 
+    let thing = rip_to_route(rip_rt, next_hop);
+    println!("{:?}", rip_net);
+    println!("{:?}", thing);
     rip_rt.cost = rip_rt.cost + 1;
     if fwd_table.contains_key(&rip_net) {
         if fwd_table.get(&rip_net).unwrap().next_hop == ForwardingOption::ToSelf || rip_rt.cost == 0 {
             panic!("Route to self should not be encountered in update")
         }
-
         let prev_route = fwd_table.get(&rip_net).unwrap();
         match prev_route.cost {
             Some(cost) => {
                 if cost > rip_rt.cost {
                     // If lower cost, change next hop
-                    fwd_table.insert(rip_net, rip_to_route(rip_rt));
+                    fwd_table.insert(rip_net, rip_to_route(rip_rt, next_hop));
+                } else if prev_route.next_hop == ForwardingOption::Ip(Ipv4Addr::from(rip_rt.address)) {
+                    // Network topology has changed
+                    fwd_table.insert(rip_net, rip_to_route(rip_rt, next_hop));
                 } else {
-                    if prev_route.next_hop == ForwardingOption::Ip(Ipv4Addr::from(rip_rt.address)) {
-                        // Network topology has changed
-                        fwd_table.insert(rip_net, rip_to_route(rip_rt));
-                    }
+                    //NOTHING IS ADDED
+                    println!("Didn't Satify any conditions");
                 }
             }
             None => panic!("Route cost should not be None"), // Route is to self, do nothing
         }
     } else {
-        fwd_table.insert(rip_net, rip_to_route(rip_rt));
+        println!("ACTUALLY GOT HERE WHAT??!");
+        fwd_table.insert(rip_net, rip_to_route(rip_rt, next_hop));
     }
 }

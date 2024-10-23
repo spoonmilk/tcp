@@ -67,7 +67,7 @@ impl Node {
         if my_type == NodeType::Router {
             let rip_periodic = Arc::clone(&listen_mutex);
             // let timeout_check = Arc::clone(&listen_mutex);
-            // thread::spawn(move || Node::rip_go(rip_periodic));
+            thread::spawn(move || Node::rip_go(rip_periodic));
             // thread::spawn(move || Node::run_table_check(timeout_check));    
         } 
 
@@ -369,7 +369,7 @@ impl Node {
                     }
                     2 => { // Received a routing response
                         println!("Received a routing response...updating table");
-                        self.update_fwd_table(&mut rip_msg); // Update the forwarding table according to the response
+                        self.update_fwd_table(&mut rip_msg, src_ip); // Update the forwarding table according to the response
                     }
                     _ => panic!("Unsupported RIP command received"),
                 }
@@ -413,9 +413,9 @@ impl Node {
         }
     }
     /// Updates a node's RIP table according to a RIP message
-    fn update_fwd_table(&mut self, rip_msg: &mut RipMsg) {
+    fn update_fwd_table(&mut self, rip_msg: &mut RipMsg, next_hop: Ipv4Addr) {
         for route in &mut rip_msg.routes {
-            route_update(route, &mut self.forwarding_table);
+            route_update(route, &mut self.forwarding_table, &next_hop);
         }
     }
     pub fn table_to_rip(  
@@ -439,7 +439,7 @@ impl Node {
             match route.rtype {
                 RouteType::ToSelf | RouteType::Static => continue,
                 _ => {
-                    let rip_route = RipRoute::new(route.cost.clone().unwrap(), v_ip.clone().into(), mask.clone().netmask().into());
+                    let rip_route = RipRoute::new(route.cost.clone().unwrap(), mask.clone().addr().into(), mask.clone().netmask().into());
                     rip_routes.push(rip_route);
                 }
             }

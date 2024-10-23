@@ -27,7 +27,7 @@ fn init_interfaces(
             Interface::new(
                 inter_conf.name.clone(),
                 inter_conf.assigned_ip.clone(),
-                inter_conf.assigned_prefix.clone(),
+                inter_conf.assigned_prefix.clone().trunc(),
                 inter_conf.udp_addr,
                 inter_conf.udp_port,
                 inter_neighbors,
@@ -38,7 +38,7 @@ fn init_interfaces(
             inter_conf.name.clone(),
             InterfaceRep::new(
                 inter_conf.name,
-                inter_conf.assigned_prefix,
+                inter_conf.assigned_prefix.trunc(),
                 inter_conf.assigned_ip,
                 inter_rep_neighbors,
                 inter_rep_chan
