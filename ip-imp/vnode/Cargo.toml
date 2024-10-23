@@ -5,5 +5,5 @@ edition = "2021"
 
 [dependencies]
 library = { path = "../library" }
-lnxparser = { git = "https://github.com/brown-csci1680/ipstack-utils" }
+lnxparser = { path = "../lnxparser" }
 rustyline = "14.0.0"
