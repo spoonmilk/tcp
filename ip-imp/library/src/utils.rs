@@ -95,7 +95,7 @@ pub enum InterCmd {
 }
 
 //Used to store the data an interface needs to build a packet and send it
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PacketBasis {
     pub dst_ip: Ipv4Addr,
     pub msg: Vec<u8>,

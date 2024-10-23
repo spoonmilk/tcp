@@ -55,6 +55,7 @@ impl Node {
         }
 
         if my_type == NodeType::Router { 
+            thread::sleep(Duration::from_millis(100));
             self.request_all();
         }
 
