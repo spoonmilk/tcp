@@ -55,7 +55,7 @@ impl Node {
         }
 
         if my_type == NodeType::Router { 
-            self.request_all();
+             self.request_all();
         }
 
         //ONGOING TASKS
@@ -94,8 +94,9 @@ impl Node {
     fn rip_go(slf_mutex: Arc<Mutex<Node>>) {
         loop {
             thread::sleep(Duration::from_secs(5));
-            let mut slf = slf_mutex.lock().unwrap();
-            slf.rip_broadcast();
+            println!("I should broadcast rip now!")
+            // let mut slf = slf_mutex.lock().unwrap();
+            // slf.rip_broadcast();
         }
     }
     /// Periodically checks the entries of the forwarding table
@@ -107,9 +108,10 @@ impl Node {
             // std::mem::drop(slf); // Drop for wait, let's not block the others!
             // Wait for time to pass
             thread::sleep(Duration::from_secs(12));
+            println!("I should check the table now!")
             // Now check the similarity of the two
-            let slf = slf_mutex.lock().unwrap();
-            println!("Checking forwarding table of len {}" , slf.forwarding_table.len());
+            // let slf = slf_mutex.lock().unwrap();
+            // println!("Checking forwarding table of len {}" , slf.forwarding_table.len());
             // for (v_net, route) in &old_table {
             //     // If a route has been changed
             //     let new_route = slf.forwarding_table.get(v_net).unwrap();
@@ -356,20 +358,7 @@ impl Node {
             Some(prefix) => Ok(prefix),
             None => Err(Error::new(ErrorKind::Other, "No matching prefix found"))
         }
-    }
-    /*fn longest_prefix(masks: Vec<&Ipv4Net>, addr: &Ipv4Addr) -> Result<Ipv4Net> {
-        let mut trie_node = TrieNode::new();
-        for mask in masks {
-            trie_node.insert(mask.network());
-        }
-        match trie_node.search(addr) {
-            Ok(search_res) => {
-                let address: Ipv4Addr = search_res.parse().expect("fuck");
-                return Ok(Ipv4Net::from(address));
-            }
-            Err(e) => Err(e),
-        }
-    }*/
+    } 
     /// Take in a packet destined for the current node and display information from it
     fn process_packet(&mut self, pack: Packet) -> () {
         let src = Node::string_ip(pack.header.source);
@@ -386,7 +375,6 @@ impl Node {
             IpNumber(200) => { // Message received is a RIP packet
                 let rip_msg_vec: Vec<u8> = pack.data;
                 let rip_msg = deserialize_rip(rip_msg_vec);
-                println!("Received RIP packet: {:?}", rip_msg);
                 // Edit the forwarding table
                 match rip_msg.command {
                     1 => {  // Received a routing request
@@ -418,7 +406,6 @@ impl Node {
             2 => { // Send a routing response
                 let rip_resp_msg: RipMsg = table_to_rip(&mut self.forwarding_table, &self.rip_neighbors, 2, dst);
                 let ser_resp_rip: Vec<u8> = serialize_rip(rip_resp_msg.clone());
-                println!("Response message is: {:?}", rip_resp_msg);
                 self.send(dst.to_string(), ser_resp_rip, false);
             }
             _ => panic!("Invalid RIP command type!"),

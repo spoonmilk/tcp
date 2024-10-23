@@ -89,7 +89,6 @@ pub fn initialize(config_info: IPConfig) -> Result<Node> {
     }
 
     //Create and return node
-    println!("{forwarding_table:?}");
     let node = Node::new(n_type, interfaces, interface_reps, forwarding_table, rip_table); //PLACEHOLDER for now; FIX later
     Ok(node)
 }
