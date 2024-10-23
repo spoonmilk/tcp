@@ -66,9 +66,9 @@ impl Node {
         //Listen for REPL prompts from REPL thread and handle them
         if my_type == NodeType::Router {
             let rip_periodic = Arc::clone(&listen_mutex);
-            let timeout_check = Arc::clone(&listen_mutex);
-            thread::spawn(move || Node::rip_go(rip_periodic));
-            thread::spawn(move || Node::run_table_check(timeout_check));    
+            // let timeout_check = Arc::clone(&listen_mutex);
+            // thread::spawn(move || Node::rip_go(rip_periodic));
+            // thread::spawn(move || Node::run_table_check(timeout_check));    
         } 
 
 
@@ -282,7 +282,6 @@ impl Node {
             let netmask = Node::longest_prefix(self.forwarding_table.keys().collect(), dst_ip)?;
             //See what the value tied to that prefix is
             let route = self.forwarding_table.get(&netmask).unwrap();
-            // println!("Current route is {:?}", route);
             //If it's an Ip address, repeat with that IP address, an interface, forward via channel to that interface, if it is a ToSelf, handle internally
             dst_ip = match &route.next_hop {
                 ForwardingOption::Inter(name) => break Ok(Some((name, dst_ip.clone()))),
@@ -401,10 +400,8 @@ impl Node {
     fn rip_broadcast(&mut self) -> () { // For periodic and triggered updates
         let keys: Vec<Ipv4Addr> = self.rip_neighbors.keys().cloned().collect(); // So tired of this ownership bullshit 
         for addr in keys {
-            println!("Broadcasting to {}", addr);
             self.send_rip(addr, 2);
         }
-        println!("Done broadcasting.");
     }
     fn rip_request(&mut self, dst: Ipv4Addr) -> () {
         self.send_rip(dst, 1);

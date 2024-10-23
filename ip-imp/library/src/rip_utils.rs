@@ -129,7 +129,6 @@ pub fn route_update(rip_rt: &mut RipRoute, fwd_table: &mut HashMap<Ipv4Net, Rout
     ).unwrap(); 
 
     rip_rt.cost = rip_rt.cost + 1;
-    
     if fwd_table.contains_key(&rip_net) {
         if fwd_table.get(&rip_net).unwrap().next_hop == ForwardingOption::ToSelf || rip_rt.cost == 0 {
             panic!("Route to self should not be encountered in update")
