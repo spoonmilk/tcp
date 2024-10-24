@@ -249,18 +249,15 @@ impl Node {
                 panic!("\nForwarding table entry for address not found: {e:?}");
             }
         };
-        if msg_type {
-            // For Test Packets
+        if msg_type { // true = test packet, false = RIP
+            println!("Sending test packet to next hop: {}", next_hop);
             inter_rep
                 .command(InterCmd::BuildSend(pb, next_hop, true))
                 .expect("Error sending connecting to interface or sending packet");
-        //COULD BE MORE ROBUST
         } else {
-            // For RIP
             inter_rep
                 .command(InterCmd::BuildSend(pb, next_hop, false))
                 .expect("Error sending connecting to interface or sending packet");
-            //COULD BE MORE ROBUST
         }
     }
     /// Forward a packet to the node or to the next hop
@@ -285,6 +282,8 @@ impl Node {
         //Find the proper interface and hand the packet off to it
         let inter_rep_name = inter_rep_name.clone(); //Why? To get around stinkin Rust borrow checker. Get rid of this line (and the borrow on the next) to see why. Ugh
         let inter_rep = self.interface_reps.get_mut(&inter_rep_name).unwrap();
+        // Using to show route through nodes
+        println!("Forwarding packet to interface: {}", inter_rep_name);
         match inter_rep.command(InterCmd::Send(pack, next_hop)) {
             Ok(()) => Ok(()),
             Err(_) => Err(Error::new(ErrorKind::Other, "Send Error")),
