@@ -2,8 +2,6 @@ use crate::prelude::*;
 use crate::rip_utils::*;
 use crate::utils::*;
 use std::io::{Error, ErrorKind};
-use std::mem;
-use std::time::Duration;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum NodeType {
@@ -17,7 +15,7 @@ pub enum NodeType {
 #[derive(Debug)]
 pub struct Node {
     pub n_type: NodeType,
-    interfaces: Vec<Interface>, //Is depleted upon startup when all interface threads are spawned - use interface_reps to find information about each interface
+    //interfaces: Vec<Interface>, //Is depleted upon startup when all interface threads are spawned - use interface_reps to find information about each interface
     interface_reps: HashMap<String, InterfaceRep>, //Maps an interface's name to its associated InterfaceRep
     forwarding_table: HashMap<Ipv4Net, Route>,
     rip_neighbors: HashMap<Ipv4Addr, Vec<Route>>, // Stores route information learned about from neighbors
@@ -28,14 +26,14 @@ pub struct Node {
 impl Node {
     pub fn new(
         n_type: NodeType,
-        interfaces: Vec<Interface>,
+        //interfaces: Vec<Interface>,
         interface_reps: HashMap<String, InterfaceRep>,
         forwarding_table: HashMap<Ipv4Net, Route>,
         rip_neighbors: HashMap<Ipv4Addr, Vec<Route>>,
     ) -> Node {
         Node {
             n_type,
-            interfaces,
+            //interfaces,
             interface_reps,
             forwarding_table,
             rip_neighbors,
@@ -44,22 +42,16 @@ impl Node {
 
     /// Runs the node and spawns interfaces
     pub fn run(mut self, recv_rchan: Receiver<CmdType>) -> () {
-        let my_type = self.n_type.clone();
-
         //STARTUP TASKS
-        //Spawn all interfaces - interfaces is DEPLETED after this and unusable
-        let interfaces = mem::take(&mut self.interfaces);
-        for interface in interfaces {
-            thread::spawn(move || interface.run());
-        }
-
-        if my_type == NodeType::Router {
-            thread::sleep(Duration::from_millis(100));
+        //Request RIP routes from neighboring routers
+        if self.n_type == NodeType::Router {
+            thread::sleep(Duration::from_millis(100)); //Make sure all routers have been initialized before requesting
             self.request_all();
         }
 
         //ONGOING TASKS
         //Define mutex to protect self - although each tokio "thread" runs asynchronously instead of concurrently, mutexes are still needed (despite what I originally thought)
+        let my_type = self.n_type.clone();
         let listen_mutex = Arc::new(Mutex::new(self));
         let repl_mutex = Arc::clone(&listen_mutex);
         //Listen for REPL prompts from REPL thread and handle them
@@ -127,7 +119,6 @@ impl Node {
     /// Listen for messages on node interfaces
     fn interface_listen(slf_mutex: Arc<Mutex<Node>>) -> () {
         loop {
-            //println!("Waiting for messages from interfaces");
             let mut packets = Vec::new();
             let mut slf = slf_mutex.lock().unwrap();
             for inter_rep in slf.interface_reps.values_mut() {
@@ -140,7 +131,6 @@ impl Node {
                     }
                 }
             }
-            //println!("Received {} packets from interfaces", packets.len());
             for pack in packets {
                 slf.forward_packet(pack).expect("Error forwarding packet");
             }
@@ -423,7 +413,7 @@ impl Node {
             2 => {
                 // Send a routing response
                 // println!("Sending RIP response to neighbor {}", dst);
-                let rip_resp_msg: RipMsg = self.table_to_rip(dst);
+                let rip_resp_msg: RipMsg = self.table_to_rip();
                 let ser_resp_rip: Vec<u8> = serialize_rip(rip_resp_msg.clone());
                 self.send(dst.to_string(), ser_resp_rip, false);
             }
@@ -452,21 +442,7 @@ impl Node {
             route_update(route, &mut self.forwarding_table, &next_hop);
         }
     }
-    pub fn table_to_rip(&mut self, dst: Ipv4Addr) -> RipMsg {
-        let v_ip = match self.proper_interface(&dst) {
-            Ok(Some((name, addr))) => {
-                if addr != dst {
-                    panic!("Destination address should be equal!")
-                }
-                let int_rep = self.interface_reps.get(name).unwrap();
-                int_rep.v_ip
-            }
-            Ok(None) => {
-                panic!("This shouldn't happen!")
-            }
-            Err(_) => todo!(),
-        };
-
+    pub fn table_to_rip(&mut self) -> RipMsg {
         let mut rip_routes: Vec<RipRoute> = Vec::new();
         for (mask, route) in &self.forwarding_table {
             match route.rtype {

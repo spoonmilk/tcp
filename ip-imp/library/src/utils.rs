@@ -2,7 +2,7 @@ use crate::prelude::*;
 use std::io::{Error, ErrorKind};
 use std::time::Instant;
 
-/*
+/*OUTDATED
 INCREDIBLY CONFUSING CHART OF FWDING TABLE STRUCTURE INTENDED TO MAKE SAID STRUCTURE LESS CONFUSING
 Key: Ipv4Net, Val: Route(RouteType, Cost: Option<i32>, ForwardingOption)
                         ^(Local | Static | Rip  | ToSelf)   ^(Ip(Ipv4Addr) | Inter(String) | ToSelf)
@@ -46,6 +46,18 @@ pub enum ForwardingOption {
     Ip(Ipv4Addr),  //Forwarding to an IP address
     Inter(String), // Forwarding to an interface - the String is the name of the interface
     ToSelf,        // For package destined for current node
+}
+
+#[derive(Debug, Clone)]
+pub struct Packet {
+    pub header: Ipv4Header,
+    pub data: Vec<u8>,
+}
+
+#[derive(Debug)]
+pub struct BiChan<T, U> {
+    pub send: Sender<T>,
+    pub recv: Receiver<U>,
 }
 
 //Used to hold all the data that a node needs to know about a given interface
@@ -112,8 +124,8 @@ pub struct Interface {
     pub udp_addr: Ipv4Addr,
     pub udp_port: u16,
     pub neighbors: HashMap<Ipv4Addr, u16>,
-    pub chan: BiChan<Packet, InterCmd>, //Channel that sends packets and receives InterCmd
-    pub status: InterfaceStatus, //Only non-static field - represents current status of the interface
+    pub status: Mutex<InterfaceStatus>, //Only non-static field - represents current status of the interface
+    pub udp_sock: UdpSocket
 }
 
 impl Interface {
@@ -124,7 +136,6 @@ impl Interface {
         udp_addr: Ipv4Addr,
         udp_port: u16,
         neighbors: HashMap<Ipv4Addr, u16>,
-        chan: BiChan<Packet, InterCmd>,
     ) -> Interface {
         Interface {
             name,
@@ -133,62 +144,72 @@ impl Interface {
             udp_addr,
             udp_port,
             neighbors,
-            chan,
-            status: InterfaceStatus::Up, //Status always starts as Up
+            status: Mutex::new(InterfaceStatus::Up), //Status always starts as Up
+            udp_sock: UdpSocket::bind(format!("127.0.0.1:{}", udp_port)).expect("Unable to bind to port")
         }
     }
-    pub fn run(mut self) -> () {
-        let mut udp_sock = UdpSocket::bind(format!("127.0.0.1:{}", self.udp_port))
-            .expect("Unable to bind to port");
-        udp_sock.set_nonblocking(true).unwrap();
+    pub fn run(self, chan: BiChan<Packet, InterCmd>) -> () {
+        //Make arc of self and clone
+        let slf_arc1 = Arc::new(self);
+        let slf_arc2 = Arc::clone(&slf_arc1);
+        //Unpack BiChan and listen for node commands and packets coming across the network
+        let sender = chan.send;
+        let receiver = chan.recv;
+        thread::spawn(move || Interface::node_listen(receiver, slf_arc1));
+        Interface::ether_listen( sender, slf_arc2);
+    }
+    fn node_listen(receiver: Receiver<InterCmd>, slf: Arc<Interface>) -> () {
         loop {
-            self.node_listen(&mut udp_sock);
-            self.ether_listen(&mut udp_sock);
+            match receiver.recv() {
+                Ok(InterCmd::BuildSend(pb, next_hop, msg_type)) => {
+                    let status = slf.status.lock().unwrap();
+                    if let InterfaceStatus::Up = *status {
+                        let builded = slf.build(pb, msg_type);
+                        slf.send(builded, next_hop)
+                            .expect("Error sending packet");
+                    }
+                }
+                Ok(InterCmd::Send(pack, next_hop)) => {
+                    let status = slf.status.lock().unwrap();
+                    if let InterfaceStatus::Up = *status {
+                        slf.send(pack, next_hop)
+                            .expect("Error sending packet");
+                    }
+                }
+                Ok(InterCmd::ToggleStatus) => Interface::toggle_status(&slf),
+                Err(e) => panic!("Error Receiving from almighty node: {e:?}"),
+            }
         }
     }
-    fn node_listen(&mut self, udp_sock: &mut UdpSocket) -> () {
-        let chan_res = self.chan.recv.try_recv();
-        match chan_res {
-            Ok(InterCmd::BuildSend(pb, next_hop, msg_type)) => {
-                if let InterfaceStatus::Up = self.status {
-                    let builded = self.build(pb, msg_type);
-                    self.send(udp_sock, builded, next_hop)
-                        .expect("Error sending packet");
+    fn ether_listen(sender: Sender<Packet>, slf: Arc<Interface>) -> () {
+        loop {
+            let status = slf.status.lock().unwrap();
+            match *status {
+                InterfaceStatus::Up => {
+                    mem::drop(status);
+                    let pack = match slf.recv() {
+                        Ok(pack) => pack,
+                        Err(ref e) if e.kind() == ErrorKind::WouldBlock => return,
+                        Err(e) => panic!("Error while trying to recv: {e:?}"),
+                    };
+                    sender.send(pack)
+                        .expect("Channel to almighty node disconnected");
+                }
+                InterfaceStatus::Down => {
+                    mem::drop(status);
+                    thread::sleep(Duration::from_millis(100));
                 }
             }
-            Ok(InterCmd::Send(pack, next_hop)) => {
-                if let InterfaceStatus::Up = self.status {
-                    self.send(udp_sock, pack, next_hop)
-                        .expect("Error sending packet");
-                }
-            }
-            Ok(InterCmd::ToggleStatus) => self.toggle_status(),
-            Err(TryRecvError::Empty) => {}
-            Err(TryRecvError::Disconnected) => panic!("Channel to node disconnected :("),
         }
     }
-    fn ether_listen(&self, udp_sock: &mut UdpSocket) -> () {
-        match self.status {
+    fn toggle_status(slf_arc: &Arc<Interface>) -> () {
+        let mut status = slf_arc.status.lock().unwrap();
+        match *status {
             InterfaceStatus::Up => {
-                let pack = match self.try_recv(udp_sock) {
-                    Ok(pack) => pack,
-                    Err(ref e) if e.kind() == ErrorKind::WouldBlock => return,
-                    Err(e) => panic!("Error while trying to recv: {e:?}"),
-                };
-                self.pass_packet(pack)
-                    .expect("Channel to almighty node disconnected");
-            }
-            InterfaceStatus::Down => {}
-        }
-    }
-    //Fix this upon failure
-    fn toggle_status(&mut self) -> () {
-        match self.status {
-            InterfaceStatus::Up => {
-                self.status = InterfaceStatus::Down;
+                *status = InterfaceStatus::Down;
             }
             InterfaceStatus::Down => {
-                self.status = InterfaceStatus::Up;
+                *status = InterfaceStatus::Up;
             }
         }
     }
@@ -216,9 +237,8 @@ impl Interface {
             data: payload,
         }; // Packet built!
     }
-    pub fn send(
+    fn send(
         &self,
-        sock: &mut UdpSocket,
         pack: Packet,
         next_hop: Ipv4Addr,
     ) -> std::io::Result<()> {
@@ -230,15 +250,17 @@ impl Interface {
         message.extend(pack.data);
 
         // Send
+        let sock = &self.udp_sock;
         match sock.send_to(&message, format!("127.0.0.1:{}", dst_neighbor)) {
             // TODO: Do something on Ok? Make error more descriptive?
             Ok(_) => Ok(()),
             Err(e) => Err(e),
         }
     }
-    pub fn try_recv(&self, socket: &mut UdpSocket) -> Result<Packet> {
+    fn recv(&self) -> Result<Packet> {
         let mut received = false;
         let mut buf: [u8; 1500] = [0; 1500];
+        let socket = &self.udp_sock;
         while !received {
             let len = socket.recv(&mut buf)?; // Break if receive
             if len != 0 {
@@ -262,20 +284,5 @@ impl Interface {
             }
         }
     }
-    fn pass_packet(&self, pack: Packet) -> result::Result<(), SendError<Packet>> {
-        self.chan.send.send(pack)
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct Packet {
-    pub header: Ipv4Header,
-    pub data: Vec<u8>,
-}
-
-#[derive(Debug)]
-pub struct BiChan<T, U> {
-    pub send: Sender<T>,
-    pub recv: Receiver<U>,
 }
 
