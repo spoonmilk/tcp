@@ -124,19 +124,6 @@ impl Node {
                 slf.rip_broadcast();
                 to_remove.iter().for_each(|prf| { slf.forwarding_table.remove(prf).expect("Something fishy"); })
             }
-            /*
-            for learned_routes in &slf.rip_neighbors {
-                for route in learned_routes.1 {
-                    if time_now - route.creation_time >= 12000 {
-                        // Set route cost to 16 in FWD table
-                        // Send updated table to all neighbors
-                        // Remove it from table
-                        // We goo
-                        //done 
-                    }
-                }
-            }
-            */
         }
     }
     /// Listen for messages on node interfaces
