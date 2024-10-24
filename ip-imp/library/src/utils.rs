@@ -222,7 +222,7 @@ impl Interface {
         pack: Packet,
         next_hop: Ipv4Addr,
     ) -> std::io::Result<()> {
-        // Grab neighbor address to send to 
+        // Grab neighbor address to send to
         let dst_neighbor = self.neighbors.get(&next_hop).unwrap();
         let mut message = vec![0u8; 20];
         let mut writer = &mut message[..];

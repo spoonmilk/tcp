@@ -128,8 +128,8 @@ pub fn route_update(
 ) {
     let rip_net =
         Ipv4Net::with_netmask(Ipv4Addr::from(rip_rt.address), Ipv4Addr::from(rip_rt.mask))
-            .unwrap()
-            .trunc();
+            .unwrap();
+            //.trunc();
     // for debug
     // let thing = rip_to_route(rip_rt, next_hop);
     // println!("{:?}", rip_net);
@@ -146,10 +146,7 @@ pub fn route_update(
                     } else if prev_route.next_hop == ForwardingOption::Ip(Ipv4Addr::from(rip_rt.address)) {
                         // Network topology has changed
                         fwd_table.insert(rip_net, rip_to_route(rip_rt, next_hop));
-                    } else {
-                        //NOTHING IS ADDED
-                        println!("Didn't Satify any conditions");
-                    }
+                    } else {} //NOTHING IS ADDED
                 }
                 None => panic!("Route cost should not be None"), // Route is to self, do nothing
             }
