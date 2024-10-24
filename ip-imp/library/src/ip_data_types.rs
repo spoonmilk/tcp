@@ -109,6 +109,22 @@ impl Node {
             thread::sleep(Duration::from_millis(12000));
             let mut slf = slf_mutex.lock().unwrap();
             let time_now = Instant::now().elapsed().as_millis() as u64;
+            let mut to_remove = Vec::new();
+            //Thought it'd be easier just to loop through the forwarding table itself so that updating/deleting the route wouldn't be painful
+            for (prefix, route) in &mut slf.forwarding_table {
+                match route.rtype {
+                    RouteType::Rip if time_now - route.creation_time >= 12000 => {
+                        route.cost = Some(16);
+                        to_remove.push(prefix.clone()); //Clone used to avoid stinky borrowing issues
+                    }
+                    _ => {}
+                }
+            }
+            if !to_remove.is_empty() {
+                slf.rip_broadcast();
+                to_remove.iter().for_each(|prf| { slf.forwarding_table.remove(prf).expect("Something fishy"); })
+            }
+            /*
             for learned_routes in &slf.rip_neighbors {
                 for route in learned_routes.1 {
                     if time_now - route.creation_time >= 12000 {
@@ -119,6 +135,7 @@ impl Node {
                     }
                 }
             }
+            */
         }
     }
     /// Listen for messages on node interfaces
