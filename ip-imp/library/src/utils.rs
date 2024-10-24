@@ -18,7 +18,7 @@ pub struct Route {
     pub rtype: RouteType,           //Indicates how route was learned
     pub cost: Option<u32>, //Indicates cost of route (how many hops - important for lr REPL command) - cost can be unknown (for default route), hence the Option
     pub next_hop: ForwardingOption, //Contains all information needed to proceed with the routing process
-    pub creation_time: u64,
+    pub creation_time: Instant,
 }
 
 impl Route {
@@ -27,7 +27,7 @@ impl Route {
             rtype,
             cost,
             next_hop,
-            creation_time: Instant::now().elapsed().as_millis() as u64,
+            creation_time: Instant::now(),
         }
     }
 }
@@ -222,9 +222,7 @@ impl Interface {
         pack: Packet,
         next_hop: Ipv4Addr,
     ) -> std::io::Result<()> {
-        // Grab neighbor address to send to
-        println!("My neighbors are: {:#?}", self.neighbors);
-        println!("Next hop is: {}", next_hop);
+        // Grab neighbor address to send to 
         let dst_neighbor = self.neighbors.get(&next_hop).unwrap();
         let mut message = vec![0u8; 20];
         let mut writer = &mut message[..];

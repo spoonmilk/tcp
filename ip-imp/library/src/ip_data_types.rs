@@ -3,7 +3,7 @@ use crate::rip_utils::*;
 use crate::utils::*;
 use std::io::{Error, ErrorKind};
 use std::mem;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum NodeType {
@@ -105,16 +105,15 @@ impl Node {
         loop {
             thread::sleep(Duration::from_millis(12000));
             let mut slf = slf_mutex.lock().unwrap();
-            let time_now = Instant::now().elapsed().as_millis() as u64;
             let mut to_remove = Vec::new();
             //Thought it'd be easier just to loop through the forwarding table itself so that updating/deleting the route wouldn't be painful
             for (prefix, route) in &mut slf.forwarding_table {
                 match route.rtype {
-                    RouteType::Rip if time_now - route.creation_time >= 12000 => {
+                    RouteType::Rip if route.creation_time.elapsed().as_millis() >= 12000 => {
                         route.cost = Some(16);
                         to_remove.push(prefix.clone()); //Clone used to avoid stinky borrowing issues
                     }
-                    _ => {}
+                    _ => { }
                 }
             }
             if !to_remove.is_empty() {
