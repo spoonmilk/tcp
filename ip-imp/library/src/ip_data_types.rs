@@ -115,7 +115,8 @@ impl Node {
                         // Set route cost to 16 in FWD table
                         // Send updated table to all neighbors
                         // Remove it from table
-                        // We good
+                        // We goo
+                        //done 
                     }
                 }
             }
