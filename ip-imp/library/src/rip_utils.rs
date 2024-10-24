@@ -135,30 +135,35 @@ pub fn route_update(
     // println!("{:?}", rip_net);
     // println!("{:?}", thing);
     rip_rt.cost = rip_rt.cost + 1;
-    if fwd_table.contains_key(&rip_net) {
-        if fwd_table.get(&rip_net).unwrap().next_hop == ForwardingOption::ToSelf || rip_rt.cost == 0
-        {
-            panic!("Route to self should not be encountered in update")
-        }
-        let prev_route = fwd_table.get(&rip_net).unwrap();
-        match prev_route.cost {
-            Some(cost) => {
-                if cost > rip_rt.cost {
-                    // If lower cost, change next hop
-                    fwd_table.insert(rip_net, rip_to_route(rip_rt, next_hop));
-                } else if prev_route.next_hop
-                    == ForwardingOption::Ip(Ipv4Addr::from(rip_rt.address))
-                {
-                    // Network topology has changed
-                    fwd_table.insert(rip_net, rip_to_route(rip_rt, next_hop));
-                } else {
-                    //NOTHING IS ADDED
-                    ()
+    match get_route(&rip_net, &fwd_table) {
+        Some(prev_route) if prev_route.next_hop == ForwardingOption::ToSelf => panic!("Route to self should not be encountered in update"),
+        Some(prev_route) => {
+            match prev_route.cost {
+                Some(cost) => {
+                    if cost > rip_rt.cost {
+                        // If lower cost, change next hop
+                        fwd_table.insert(rip_net, rip_to_route(rip_rt, next_hop));
+                    } else if prev_route.next_hop == ForwardingOption::Ip(Ipv4Addr::from(rip_rt.address)) {
+                        // Network topology has changed
+                        fwd_table.insert(rip_net, rip_to_route(rip_rt, next_hop));
+                    } else {
+                        //NOTHING IS ADDED
+                        println!("Didn't Satify any conditions");
+                    }
                 }
+                None => panic!("Route cost should not be None"), // Route is to self, do nothing
             }
-            None => panic!("Route cost should not be None"), // Route is to self, do nothing
         }
-    } else {
-        fwd_table.insert(rip_net, rip_to_route(rip_rt, next_hop));
+        None => { fwd_table.insert(rip_net, rip_to_route(rip_rt, next_hop)); }
     }
+}
+
+fn get_route(prefix: &Ipv4Net, fwd_table: &HashMap<Ipv4Net, Route>) -> Option<Route> {
+    let truncated_prefix = prefix.trunc();
+    for (tab_prf, route) in fwd_table {
+        if tab_prf.trunc() == truncated_prefix {
+            return Some(route.clone());
+        }
+    }
+    None
 }
