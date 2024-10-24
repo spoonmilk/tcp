@@ -5,8 +5,7 @@ use crate::utils::*;
 fn init_interfaces(
     interfaces: Vec<InterfaceConfig>,
     neighbors: Vec<NeighborConfig>
-) -> (Vec<Interface>, HashMap<String, InterfaceRep>) {
-    let mut created_interfaces = Vec::new();
+) -> HashMap<String, InterfaceRep> {
     let mut interface_reps = HashMap::new();
     for inter_conf in interfaces {
         //Initialize bidirectional channels for both the Interface AND it's corresponding InterfaceRep
@@ -23,17 +22,16 @@ fn init_interfaces(
             }
         }
         //Add the completed Interfaces and InterfaceReps to their corresponding vectors for return
-        created_interfaces.push(
-            Interface::new(
-                inter_conf.name.clone(),
-                inter_conf.assigned_ip.clone(),
-                inter_conf.assigned_prefix.clone(),//.trunc(),
-                inter_conf.udp_addr,
-                inter_conf.udp_port,
-                inter_neighbors,
-                inter_chan
-            )
+        let new_interface =  Interface::new(
+            inter_conf.name.clone(),
+            inter_conf.assigned_ip.clone(),
+            inter_conf.assigned_prefix.clone(),//.trunc(),
+            inter_conf.udp_addr,
+            inter_conf.udp_port,
+            inter_neighbors,
+            //inter_chan
         );
+        thread::spawn(move || new_interface.run(inter_chan));
         interface_reps.insert(
             inter_conf.name.clone(),
             InterfaceRep::new(
@@ -45,7 +43,7 @@ fn init_interfaces(
             )
         );
     }
-    (created_interfaces, interface_reps)
+    interface_reps
 }
 
 ///Creates a pair of connected BiChans for corresponding interfaces and interfaceReps
@@ -65,8 +63,8 @@ fn make_bichans() -> (BiChan<Packet, InterCmd>, BiChan<InterCmd, Packet>) {
 
 // Handles initializing routers, returns to initialize
 pub fn initialize(config_info: IPConfig) -> Result<Node> {
-    // Create list of interfaces and corresponding hashmap of interfaceReps (keys are names of interfaceReps)
-    let (interfaces, interface_reps) = init_interfaces(
+    // Create hashmap of interfaceReps (keys are names of interfaceReps)
+    let interface_reps = init_interfaces(
         config_info.interfaces,
         config_info.neighbors
     );
@@ -79,8 +77,8 @@ pub fn initialize(config_info: IPConfig) -> Result<Node> {
     //Create forwarding table
     let mut forwarding_table = HashMap::new();
     add_static_routes(&mut forwarding_table, config_info.static_routes);
-    add_local_routes(&mut forwarding_table, &interfaces);
-    add_toself_routes(&mut forwarding_table, &interfaces);
+    add_local_routes(&mut forwarding_table, &interface_reps);
+    add_toself_routes(&mut forwarding_table, &interface_reps);
 
     // Create RIP neighbors table
     let mut rip_table: HashMap<Ipv4Addr, Vec<Route>> = HashMap::new();
@@ -90,7 +88,8 @@ pub fn initialize(config_info: IPConfig) -> Result<Node> {
     }
 
     //Create and return node
-    let node = Node::new(n_type, interfaces, interface_reps, forwarding_table, rip_table); //PLACEHOLDER for now; FIX later
+    //let node = Node::new(n_type, interfaces, interface_reps, forwarding_table, rip_table); //PLACEHOLDER for now; FIX later
+    let node = Node::new(n_type, interface_reps, forwarding_table, rip_table); //PLACEHOLDER for now; FIX later
     Ok(node)
 }
 
@@ -117,21 +116,23 @@ fn add_rip_neighbors(
     }   
 }
 
-fn add_local_routes(fwd_table: &mut HashMap<Ipv4Net, Route>, interfaces: &Vec<Interface>) -> () {
-    for interface in interfaces {
+fn add_local_routes(fwd_table: &mut HashMap<Ipv4Net, Route>, interface_reps: &HashMap<String, InterfaceRep>) -> () {
+    let interface_reps = interface_reps.values();
+    for interface_rep in interface_reps {
         let new_route = Route::new(
             RouteType::Local,
             Some(0),
-            ForwardingOption::Inter(interface.name.clone())
+            ForwardingOption::Inter(interface_rep.name.clone())
         );
-        fwd_table.insert(interface.v_net.clone(), new_route);
+        fwd_table.insert(interface_rep.v_net.clone(), new_route);
     }
 }
 
-fn add_toself_routes(fwd_table: &mut HashMap<Ipv4Net, Route>, interfaces: &Vec<Interface>) -> () {
-    for interface in interfaces {
+fn add_toself_routes(fwd_table: &mut HashMap<Ipv4Net, Route>, interface_reps: &HashMap<String, InterfaceRep>) -> () {
+    let interface_reps = interface_reps.values();
+    for interface_rep in interface_reps {
         let new_route = Route::new(RouteType::ToSelf, None, ForwardingOption::ToSelf);
-        let self_addr = Ipv4Net::new((&interface).v_ip, 32).unwrap();
+        let self_addr = Ipv4Net::new((&interface_rep).v_ip, 32).unwrap();
         fwd_table.insert(self_addr, new_route);
     }
 }

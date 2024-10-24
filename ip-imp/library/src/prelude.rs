@@ -10,3 +10,5 @@ pub use etherparse::{Ipv4Header, IpNumber};
 pub use lnxparser::{IPConfig, InterfaceConfig, NeighborConfig, RoutingType, StaticRoute};
 pub use ipnet::Ipv4Net;
 //pub use prettyprint::PrettyPrint;
+pub use std::mem;
+pub use std::time::Duration;
