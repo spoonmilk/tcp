@@ -1,5 +1,6 @@
 use crate::prelude::*;
 use std::io::{Error, ErrorKind};
+use std::time::Instant;
 
 /*
 INCREDIBLY CONFUSING CHART OF FWDING TABLE STRUCTURE INTENDED TO MAKE SAID STRUCTURE LESS CONFUSING
@@ -17,6 +18,7 @@ pub struct Route {
     pub rtype: RouteType,           //Indicates how route was learned
     pub cost: Option<u32>, //Indicates cost of route (how many hops - important for lr REPL command) - cost can be unknown (for default route), hence the Option
     pub next_hop: ForwardingOption, //Contains all information needed to proceed with the routing process
+    pub creation_time: u64,
 }
 
 impl Route {
@@ -25,6 +27,7 @@ impl Route {
             rtype,
             cost,
             next_hop,
+            creation_time: Instant::now().elapsed().as_millis() as u64,
         }
     }
 }

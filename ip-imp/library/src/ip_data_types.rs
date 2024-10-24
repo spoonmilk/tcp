@@ -3,7 +3,7 @@ use crate::rip_utils::*;
 use crate::utils::*;
 use std::io::{Error, ErrorKind};
 use std::mem;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum NodeType {
@@ -66,9 +66,9 @@ impl Node {
         //Listen for REPL prompts from REPL thread and handle them
         if my_type == NodeType::Router {
             let rip_periodic = Arc::clone(&listen_mutex);
-            // let timeout_check = Arc::clone(&listen_mutex);
+            let timeout_check = Arc::clone(&listen_mutex);
             thread::spawn(move || Node::rip_go(rip_periodic));
-            // thread::spawn(move || Node::run_table_check(timeout_check));    
+            thread::spawn(move || Node::run_table_check(timeout_check));    
         } 
 
 
@@ -106,8 +106,19 @@ impl Node {
     /// Periodically checks the entries of the forwarding table
     fn run_table_check(slf_mutex: Arc<Mutex<Node>>) {
         loop {
-            thread::sleep(Duration::from_secs(12));
-            // println!("I should check the table now!")
+            thread::sleep(Duration::from_millis(12000));
+            let mut slf = slf_mutex.lock().unwrap();
+            let time_now = Instant::now().elapsed().as_millis() as u64;
+            for learned_routes in &slf.rip_neighbors {
+                for route in learned_routes.1 {
+                    if time_now - route.creation_time >= 12000 {
+                        // Set route cost to 16 in FWD table
+                        // Send updated table to all neighbors
+                        // Remove it from table
+                        // We good
+                    }
+                }
+            }
         }
     }
     /// Listen for messages on node interfaces
