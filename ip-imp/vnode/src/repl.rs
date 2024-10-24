@@ -1,8 +1,5 @@
-/*use easy_repl::{command, CommandStatus, Repl};
-use easy_repl::anyhow::{self, Context};*/
 use rustyline::{error::ReadlineError, history::DefaultHistory, Editor};
-use std::{io::Split, result};
-//use std::env;
+use std::result;
 use library::ip_data_types::{CmdType, NodeType};
 use std::sync::mpsc::Sender; //{Arc, Mutex, mpsc::Sender};
 struct NodeRep {
@@ -88,6 +85,7 @@ fn parse_send(args: &mut Vec<String>) -> (String, String) {
     return (addr, rest);
 }
 
+/// Make sure command has valid amount of arguments
 fn validate_args(cmd: &str, args: &Vec<String>) -> result::Result<(), String> {
     match cmd {
         "li" => {
