@@ -93,8 +93,8 @@ pub enum InterfaceStatus {
 #[derive(Debug)]
 pub enum InterCmd {
     BuildSend(PacketBasis, Ipv4Addr, bool), //Build a packet using this PacketBasis and send it - when a send REPL command is used
-    Send(Packet, Ipv4Addr),           //Send this packet - when a packet is being forwarded
-    ToggleStatus,                     //Make status down if up or up if down
+    Send(Packet, Ipv4Addr),                 //Send this packet - when a packet is being forwarded
+    ToggleStatus,                           //Make status down if up or up if down
 }
 
 //Used to store the data an interface needs to build a packet and send it
@@ -138,7 +138,8 @@ impl Interface {
         }
     }
     pub fn run(mut self) -> () {
-        let mut udp_sock = UdpSocket::bind(format!("127.0.0.1:{}", self.udp_port)).expect("Unable to bind to port");
+        let mut udp_sock = UdpSocket::bind(format!("127.0.0.1:{}", self.udp_port))
+            .expect("Unable to bind to port");
         udp_sock.set_nonblocking(true).unwrap();
         loop {
             self.node_listen(&mut udp_sock);
@@ -151,16 +152,18 @@ impl Interface {
             Ok(InterCmd::BuildSend(pb, next_hop, msg_type)) => {
                 if let InterfaceStatus::Up = self.status {
                     let builded = self.build(pb, msg_type);
-                    self.send(udp_sock, builded, next_hop).expect("Error sending packet");
+                    self.send(udp_sock, builded, next_hop)
+                        .expect("Error sending packet");
                 }
             }
             Ok(InterCmd::Send(pack, next_hop)) => {
                 if let InterfaceStatus::Up = self.status {
-                    self.send(udp_sock, pack, next_hop).expect("Error sending packet");
+                    self.send(udp_sock, pack, next_hop)
+                        .expect("Error sending packet");
                 }
             }
             Ok(InterCmd::ToggleStatus) => self.toggle_status(),
-            Err(TryRecvError::Empty) => {},
+            Err(TryRecvError::Empty) => {}
             Err(TryRecvError::Disconnected) => panic!("Channel to node disconnected :("),
         }
     }
@@ -170,9 +173,8 @@ impl Interface {
                 let pack = match self.try_recv(udp_sock) {
                     Ok(pack) => pack,
                     Err(ref e) if e.kind() == ErrorKind::WouldBlock => return,
-                    Err(e) => panic!("Error while trying to recv: {e:?}")
+                    Err(e) => panic!("Error while trying to recv: {e:?}"),
                 };
-                println!("Recieved packet, passing");
                 self.pass_packet(pack)
                     .expect("Channel to almighty node disconnected");
             }
@@ -214,8 +216,15 @@ impl Interface {
             data: payload,
         }; // Packet built!
     }
-    pub fn send(&self, sock: &mut UdpSocket, pack: Packet, next_hop: Ipv4Addr) -> std::io::Result<()> {
+    pub fn send(
+        &self,
+        sock: &mut UdpSocket,
+        pack: Packet,
+        next_hop: Ipv4Addr,
+    ) -> std::io::Result<()> {
         // Grab neighbor address to send to
+        println!("My neighbors are: {:#?}", self.neighbors);
+        println!("Next hop is: {}", next_hop);
         let dst_neighbor = self.neighbors.get(&next_hop).unwrap();
         let mut message = vec![0u8; 20];
         let mut writer = &mut message[..];
@@ -236,13 +245,11 @@ impl Interface {
             let len = socket.recv(&mut buf)?; // Break if receive
             if len != 0 {
                 received = !received;
-                println!("Received {len} bytes");
             }
         }
         match Ipv4Header::from_slice(&buf) {
             Ok((head, rest)) => {
                 let len = (head.total_len - 20) as usize;
-                println!("Ipv4 packet received should be of length {}", len);
                 let pay: Vec<u8> = Vec::from_iter(rest[0..len].iter().cloned());
                 return Ok(Packet {
                     header: head,
@@ -273,3 +280,4 @@ pub struct BiChan<T, U> {
     pub send: Sender<T>,
     pub recv: Receiver<U>,
 }
+

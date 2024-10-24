@@ -1,12 +1,11 @@
 use crate::prelude::*;
 use crate::utils::*;
 
-
 const INF: u32 = 16;
 #[derive(Debug, Clone)]
 pub struct RipMsg {
-    pub command: u16, // 1 for routing request, 2 for response
-    pub num_entries: u16, // 0 for request, < than 64
+    pub command: u16,          // 1 for routing request, 2 for response
+    pub num_entries: u16,      // 0 for request, < than 64
     pub routes: Vec<RipRoute>, // As long as num_entries
 }
 
@@ -18,7 +17,6 @@ impl RipMsg {
             routes,
         }
     }
-    
 }
 
 #[derive(Debug, Clone)]
@@ -26,7 +24,7 @@ pub struct RipRoute {
     cost: u32, // < than 16
     // Examples given with 1.2.3.0/24
     address: u32, // This is a network address > Format 1.2.3.0
-    mask: u32, // Netmask > 255.255.0
+    mask: u32,    // Netmask > 255.255.0
 }
 
 impl RipRoute {
@@ -37,7 +35,6 @@ impl RipRoute {
             mask,
         }
     }
-    
 }
 
 // Methods we need
@@ -51,24 +48,26 @@ impl RipRoute {
 // Things we should add
 // New Node field
 
-pub fn poison_routes (routes: Vec<RipRoute>, neighbor_routes: &mut HashMap<Ipv4Addr, Vec<Route>>, dst: Ipv4Addr) -> Vec<RipRoute> {
+pub fn poison_routes(
+    routes: Vec<RipRoute>,
+    neighbor_routes: &mut HashMap<Ipv4Addr, Vec<Route>>,
+    dst: Ipv4Addr,
+) -> Vec<RipRoute> {
     let mut ret_routes: Vec<RipRoute> = Vec::new();
     for route in routes {
-        if route.cost == 0 { // Locallllll
+        if route.cost == 0 {
+            // Locallllll
             ret_routes.push(route);
-        }
-        else if route.address == dst.into() {
+        } else if route.address == dst.into() {
             ret_routes.push(RipRoute::new(INF, route.address, route.mask));
         } else if neighbor_routes.contains_key(&Ipv4Addr::from(route.address)) {
             ret_routes.push(RipRoute::new(INF, route.address, route.mask));
         } else {
             ret_routes.push(route);
         }
-
     }
     ret_routes
 }
-
 
 /// Serializes a RIP message to a vector of bytes
 pub fn serialize_rip(rip_msg: RipMsg) -> Vec<u8> {
@@ -100,9 +99,9 @@ pub fn deserialize_rip(buf: Vec<u8>) -> RipMsg {
         offset += 4;
         rip_msg.routes.push(RipRoute::new(cost, address, mask));
     }
-    rip_msg 
+    rip_msg
 }
-// 
+//
 // fn check_rip_validity(rip_msg: &RipMsg) -> bool {
 //     if rip_msg.command != 1 && rip_msg.command != 2 {
 //         false
@@ -112,27 +111,33 @@ pub fn deserialize_rip(buf: Vec<u8>) -> RipMsg {
 //         true
 //     }
 // }
-// 
+//
 fn rip_to_route(rip_msg: &mut RipRoute, next_hop: &Ipv4Addr) -> Route {
     Route::new(
         RouteType::Rip,
         Some(rip_msg.cost),
-        ForwardingOption::Ip(next_hop.clone())//Ipv4Addr::from(rip_msg.address))
+        ForwardingOption::Ip(next_hop.clone()), //Ipv4Addr::from(rip_msg.address))
     )
 }
 
 /// Updates an entry in a node's RIP table according to a RIP route
-pub fn route_update(rip_rt: &mut RipRoute, fwd_table: &mut HashMap<Ipv4Net, Route>, next_hop: &Ipv4Addr) {
-    let rip_net = Ipv4Net::with_netmask(
-        Ipv4Addr::from(rip_rt.address),
-        Ipv4Addr::from(rip_rt.mask)
-    ).unwrap().trunc(); 
-    let thing = rip_to_route(rip_rt, next_hop);
-    println!("{:?}", rip_net);
-    println!("{:?}", thing);
+pub fn route_update(
+    rip_rt: &mut RipRoute,
+    fwd_table: &mut HashMap<Ipv4Net, Route>,
+    next_hop: &Ipv4Addr,
+) {
+    let rip_net =
+        Ipv4Net::with_netmask(Ipv4Addr::from(rip_rt.address), Ipv4Addr::from(rip_rt.mask))
+            .unwrap()
+            .trunc();
+    // for debug
+    // let thing = rip_to_route(rip_rt, next_hop);
+    // println!("{:?}", rip_net);
+    // println!("{:?}", thing);
     rip_rt.cost = rip_rt.cost + 1;
     if fwd_table.contains_key(&rip_net) {
-        if fwd_table.get(&rip_net).unwrap().next_hop == ForwardingOption::ToSelf || rip_rt.cost == 0 {
+        if fwd_table.get(&rip_net).unwrap().next_hop == ForwardingOption::ToSelf || rip_rt.cost == 0
+        {
             panic!("Route to self should not be encountered in update")
         }
         let prev_route = fwd_table.get(&rip_net).unwrap();
@@ -141,18 +146,19 @@ pub fn route_update(rip_rt: &mut RipRoute, fwd_table: &mut HashMap<Ipv4Net, Rout
                 if cost > rip_rt.cost {
                     // If lower cost, change next hop
                     fwd_table.insert(rip_net, rip_to_route(rip_rt, next_hop));
-                } else if prev_route.next_hop == ForwardingOption::Ip(Ipv4Addr::from(rip_rt.address)) {
+                } else if prev_route.next_hop
+                    == ForwardingOption::Ip(Ipv4Addr::from(rip_rt.address))
+                {
                     // Network topology has changed
                     fwd_table.insert(rip_net, rip_to_route(rip_rt, next_hop));
                 } else {
                     //NOTHING IS ADDED
-                    println!("Didn't Satify any conditions");
+                    ()
                 }
             }
             None => panic!("Route cost should not be None"), // Route is to self, do nothing
         }
     } else {
-        println!("ACTUALLY GOT HERE WHAT??!");
         fwd_table.insert(rip_net, rip_to_route(rip_rt, next_hop));
     }
 }

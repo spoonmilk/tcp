@@ -11,7 +11,6 @@ pub enum NodeType {
     Host,
 }
 
-
 // Add creation time to table, subtract from current time, if greater than 12 secs refresh
 // Only pertain to things with next hops
 
@@ -22,8 +21,8 @@ pub struct Node {
     interface_reps: HashMap<String, InterfaceRep>, //Maps an interface's name to its associated InterfaceRep
     forwarding_table: HashMap<Ipv4Net, Route>,
     rip_neighbors: HashMap<Ipv4Addr, Vec<Route>>, // Stores route information learned about from neighbors
-    // RIP neighbors vec
-    // Timeout table(?)
+                                                  // RIP neighbors vec
+                                                  // Timeout table(?)
 }
 
 impl Node {
@@ -54,7 +53,7 @@ impl Node {
             thread::spawn(move || interface.run());
         }
 
-        if my_type == NodeType::Router { 
+        if my_type == NodeType::Router {
             thread::sleep(Duration::from_millis(100));
             self.request_all();
         }
@@ -68,16 +67,15 @@ impl Node {
             let rip_periodic = Arc::clone(&listen_mutex);
             let timeout_check = Arc::clone(&listen_mutex);
             thread::spawn(move || Node::rip_go(rip_periodic));
-            thread::spawn(move || Node::run_table_check(timeout_check));    
-        } 
-
+            thread::spawn(move || Node::run_table_check(timeout_check));
+        }
 
         thread::spawn(move || Node::repl_listen(repl_mutex, recv_rchan));
-        
+
         //Listen for messages from interfaces and handle them
         Node::interface_listen(listen_mutex);
     }
-    
+
     /// Listen for REPL commands to the node
     fn repl_listen(slf_mutex: Arc<Mutex<Node>>, recv_rchan: Receiver<CmdType>) -> () {
         loop {
@@ -98,7 +96,6 @@ impl Node {
     fn rip_go(slf_mutex: Arc<Mutex<Node>>) {
         loop {
             thread::sleep(Duration::from_secs(5));
-            println!("Broadcasting RIP!");
             let mut slf = slf_mutex.lock().unwrap();
             slf.rip_broadcast();
         }
@@ -122,7 +119,9 @@ impl Node {
             }
             if !to_remove.is_empty() {
                 slf.rip_broadcast();
-                to_remove.iter().for_each(|prf| { slf.forwarding_table.remove(prf).expect("Something fishy"); })
+                to_remove.iter().for_each(|prf| {
+                    slf.forwarding_table.remove(prf).expect("Something fishy");
+                })
             }
         }
     }
@@ -144,7 +143,6 @@ impl Node {
             }
             //println!("Received {} packets from interfaces", packets.len());
             for pack in packets {
-                println!("Forwarding packet");
                 slf.forward_packet(pack).expect("Error forwarding packet");
             }
         }
@@ -241,30 +239,34 @@ impl Node {
             msg,
         };
         let (inter_rep, next_hop) = match self.proper_interface(&ip_addr) {
-            Ok(Some((name, next_hop))) => {
-                (
+            Ok(Some((name, next_hop))) => (
                 self.interface_reps.get_mut(&name.clone()).unwrap(),
                 next_hop,
-            )}
-            Ok(None) => { 
-                panic!("Packet sent to self") }, //FIX THIS LATER
-            Err(e) => { 
+            ),
+            Ok(None) => {
+                panic!("Packet sent to self")
+            } //FIX THIS LATER
+            Err(e) => {
                 panic!("\nForwarding table entry for address not found: {e:?}");
-                               }
+            }
         };
-        if msg_type { // For Test Packets
+        if msg_type {
+            // For Test Packets
             inter_rep
-            .command(InterCmd::BuildSend(pb, next_hop, true))
-            .expect("Error sending connecting to interface or sending packet"); //COULD BE MORE ROBUST
-        } else { // For RIP
+                .command(InterCmd::BuildSend(pb, next_hop, true))
+                .expect("Error sending connecting to interface or sending packet");
+        //COULD BE MORE ROBUST
+        } else {
+            // For RIP
             inter_rep
-            .command(InterCmd::BuildSend(pb, next_hop, false))
-            .expect("Error sending connecting to interface or sending packet"); //COULD BE MORE ROBUST
+                .command(InterCmd::BuildSend(pb, next_hop, false))
+                .expect("Error sending connecting to interface or sending packet");
+            //COULD BE MORE ROBUST
         }
-        
     }
     /// Forward a packet to the node or to the next hop
-    fn forward_packet(&mut self, pack: Packet) -> Result<()> {//std::result::Result<(), SendError<InterCmd>> {
+    fn forward_packet(&mut self, pack: Packet) -> Result<()> {
+        //std::result::Result<(), SendError<InterCmd>> {
         //Made it  cause it'll give some efficiency gains with sending through the channel (I think)
         //Run it through check_packet to see if it should be dropped
         if !Node::packet_valid(pack.clone()) {
@@ -286,7 +288,7 @@ impl Node {
         let inter_rep = self.interface_reps.get_mut(&inter_rep_name).unwrap();
         match inter_rep.command(InterCmd::Send(pack, next_hop)) {
             Ok(()) => Ok(()),
-            Err(_) => Err(Error::new(ErrorKind::Other, "Send Error"))
+            Err(_) => Err(Error::new(ErrorKind::Other, "Send Error")),
         }
     }
     /// Find the interface to forward a packet to
@@ -344,12 +346,19 @@ impl Node {
     }
     /// Longest prefix matching for packet forwarding
     fn longest_prefix(prefixes: Vec<&Ipv4Net>, addr: &Ipv4Addr) -> Result<Ipv4Net> {
-        if prefixes.len() < 1 { return Err(Error::new(ErrorKind::Other, "No prefixes to search through")) }
+        if prefixes.len() < 1 {
+            return Err(Error::new(
+                ErrorKind::Other,
+                "No prefixes to search through",
+            ));
+        }
         let mut current_longest: Option<Ipv4Net> = None;
         for prefix in prefixes {
             if prefix.contains(addr) {
                 match current_longest {
-                    Some(curr_prefix) if curr_prefix.prefix_len() < prefix.prefix_len() => current_longest = Some(prefix.clone()),
+                    Some(curr_prefix) if curr_prefix.prefix_len() < prefix.prefix_len() => {
+                        current_longest = Some(prefix.clone())
+                    }
                     None => current_longest = Some(prefix.clone()),
                     _ => {}
                 }
@@ -357,34 +366,38 @@ impl Node {
         }
         match current_longest {
             Some(prefix) => Ok(prefix),
-            None => Err(Error::new(ErrorKind::Other, "No matching prefix found"))
+            None => Err(Error::new(ErrorKind::Other, "No matching prefix found")),
         }
-    } 
+    }
     /// Take in a packet destined for the current node and display information from it
     fn process_packet(&mut self, pack: Packet) -> () {
-        println!("I am processing a packet!");
         let src = Node::string_ip(pack.header.source);
         let dst = Node::string_ip(pack.header.destination);
         let src_ip: Ipv4Addr = pack.header.source.into();
         let ttl = pack.header.time_to_live;
-        
+
         match pack.header.protocol {
-            IpNumber(0) => { // Message received is a test packet
+            IpNumber(0) => {
+                // Message received is a test packet
                 let msg = String::from_utf8(pack.data).unwrap();
-                let retstr = format!("Received tst packet: Src: {}, Dst: {}, TTL: {}, {}",src, dst, ttl, msg);
+                let retstr = format!(
+                    "Received tst packet: Src: {}, Dst: {}, TTL: {}, {}",
+                    src, dst, ttl, msg
+                );
                 println!("{}", retstr);
             }
-            IpNumber(200) => { // Message received is a RIP packet
+            IpNumber(200) => {
+                // Message received is a RIP packet
                 let rip_msg_vec: Vec<u8> = pack.data;
                 let mut rip_msg = deserialize_rip(rip_msg_vec);
                 // Edit the forwarding table
                 match rip_msg.command {
-                    1 => {  // Received a routing request
-                        println!("Received a routing request...sending response");
+                    1 => {
+                        // Received a routing request
                         self.send_rip(src_ip, 2); // Send a routing response
                     }
-                    2 => { // Received a routing response
-                        println!("Received a routing response...updating table");
+                    2 => {
+                        // Received a routing response
                         self.update_fwd_table(&mut rip_msg, src_ip); // Update the forwarding table according to the response
                     }
                     _ => panic!("Unsupported RIP command received"),
@@ -394,18 +407,24 @@ impl Node {
         }
     }
     fn string_ip(raw_ip: [u8; 4]) -> String {
-        Vec::from(raw_ip).iter().map(|num| num.to_string()).collect::<Vec<String>>().join(".")
+        Vec::from(raw_ip)
+            .iter()
+            .map(|num| num.to_string())
+            .collect::<Vec<String>>()
+            .join(".")
     }
     fn send_rip(&mut self, dst: Ipv4Addr, command: u16) -> () {
         match command {
-            1 => { // Send a routing request
-                println!("Sending RIP request to neighbor {}", dst);
+            1 => {
+                // Send a routing request
+                // println!("Sending RIP request to neighbor {}", dst);
                 let rip_req_msg: RipMsg = RipMsg::new(1, 0, Vec::new());
                 let ser_req_rip: Vec<u8> = serialize_rip(rip_req_msg);
                 self.send(dst.to_string(), ser_req_rip, false);
             }
-            2 => { // Send a routing response
-                println!("Sending RIP response to neighbor {}", dst);
+            2 => {
+                // Send a routing response
+                // println!("Sending RIP response to neighbor {}", dst);
                 let rip_resp_msg: RipMsg = self.table_to_rip(dst);
                 let ser_resp_rip: Vec<u8> = serialize_rip(rip_resp_msg.clone());
                 self.send(dst.to_string(), ser_resp_rip, false);
@@ -413,8 +432,9 @@ impl Node {
             _ => panic!("Invalid RIP command type!"),
         }
     }
-    fn rip_broadcast(&mut self) -> () { // For periodic and triggered updates
-        let keys: Vec<Ipv4Addr> = self.rip_neighbors.keys().cloned().collect(); // So tired of this ownership bullshit 
+    fn rip_broadcast(&mut self) -> () {
+        // For periodic and triggered updates
+        let keys: Vec<Ipv4Addr> = self.rip_neighbors.keys().cloned().collect(); // So tired of this ownership bullshit
         for addr in keys {
             self.send_rip(addr, 2);
         }
@@ -434,10 +454,7 @@ impl Node {
             route_update(route, &mut self.forwarding_table, &next_hop);
         }
     }
-    pub fn table_to_rip(  
-        &mut self,
-        dst: Ipv4Addr
-    ) -> RipMsg {
+    pub fn table_to_rip(&mut self, dst: Ipv4Addr) -> RipMsg {
         let v_ip = match self.proper_interface(&dst) {
             Ok(Some((name, addr))) => {
                 if addr != dst {
@@ -446,7 +463,9 @@ impl Node {
                 let int_rep = self.interface_reps.get(name).unwrap();
                 int_rep.v_ip
             }
-            Ok(None) => { panic!("This shouldn't happen!") },
+            Ok(None) => {
+                panic!("This shouldn't happen!")
+            }
             Err(_) => todo!(),
         };
 
@@ -455,7 +474,11 @@ impl Node {
             match route.rtype {
                 RouteType::ToSelf | RouteType::Static => continue,
                 _ => {
-                    let rip_route = RipRoute::new(route.cost.clone().unwrap(), mask.clone().addr().into(), mask.clone().netmask().into());
+                    let rip_route = RipRoute::new(
+                        route.cost.clone().unwrap(),
+                        mask.clone().addr().into(),
+                        mask.clone().netmask().into(),
+                    );
                     rip_routes.push(rip_route);
                 }
             }
