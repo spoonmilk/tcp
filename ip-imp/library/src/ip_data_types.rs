@@ -227,27 +227,47 @@ impl Node {
             dst_ip: ip_addr,
             msg,
         };
-        let (inter_rep, next_hop) = match self.proper_interface(&ip_addr) {
-            Ok(Some((name, next_hop))) => (
-                self.interface_reps.get_mut(&name.clone()).unwrap(),
-                next_hop,
-            ),
-            Ok(None) => {
-                panic!("Packet sent to self")
-            } //FIX THIS LATER
-            Err(e) => {
-                panic!("\nForwarding table entry for address not found: {e:?}");
+
+        // If sent to self, just process!
+        if ip_addr == self.interface_reps.get("if0").unwrap().v_ip {
+            let header = Ipv4Header {
+                source: self.interface_reps.get("if0").unwrap().v_ip.octets(),
+                destination: self.interface_reps.get("if0").unwrap().v_ip.octets(),
+                time_to_live: 16,
+                total_len: Ipv4Header::MIN_LEN_U16 + (pb.msg.len() as u16),
+                protocol: 0.into(),
+                ..Default::default()
+            };
+            let pack = Packet {
+                header,
+                data: pb.msg.clone(),
+            };
+            self.process_packet(pack);
+        }
+        else {
+
+            let (inter_rep, next_hop) = match self.proper_interface(&ip_addr) {
+                Ok(Some((name, next_hop))) => (
+                    self.interface_reps.get_mut(&name.clone()).unwrap(),
+                    next_hop,
+                ),
+                Ok(None) => {
+                panic!("No interface found for address: {}", addr);
+                } 
+                Err(e) => {
+                    panic!("\nForwarding table entry for address not found: {e:?}");
+                }
+            };
+            if msg_type { // true = test packet, false = RIP
+                println!("Sending test packet to next hop: {}", next_hop);
+                inter_rep
+                    .command(InterCmd::BuildSend(pb, next_hop, true))
+                    .expect("Error sending connecting to interface or sending packet");
+            } else {
+                inter_rep
+                    .command(InterCmd::BuildSend(pb, next_hop, false))
+                    .expect("Error sending connecting to interface or sending packet");
             }
-        };
-        if msg_type { // true = test packet, false = RIP
-            println!("Sending test packet to next hop: {}", next_hop);
-            inter_rep
-                .command(InterCmd::BuildSend(pb, next_hop, true))
-                .expect("Error sending connecting to interface or sending packet");
-        } else {
-            inter_rep
-                .command(InterCmd::BuildSend(pb, next_hop, false))
-                .expect("Error sending connecting to interface or sending packet");
         }
     }
     /// Forward a packet to the node or to the next hop
