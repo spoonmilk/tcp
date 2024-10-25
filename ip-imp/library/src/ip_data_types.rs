@@ -472,10 +472,14 @@ impl Node {
         }
     }
     /// Updates a node's RIP table according to a RIP message
-    fn update_fwd_table(&mut self, rip_msg: &mut RipMsg, next_hop: Ipv4Addr) {
+    fn update_fwd_table(&mut self, rip_msg: &mut RipMsg, next_hop: Ipv4Addr) -> bool {
+        let mut updated = false;
         for route in &mut rip_msg.routes {
-            route_update(route, &mut self.forwarding_table, &next_hop);
+            if route_update(route, &mut self.forwarding_table, &next_hop) {
+                updated = true;
+            }
         }
+        return updated;
     }
     pub fn table_to_rip(&mut self) -> RipMsg {
         let mut rip_routes: Vec<RipRoute> = Vec::new();
