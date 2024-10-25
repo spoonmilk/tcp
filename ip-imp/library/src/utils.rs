@@ -183,22 +183,15 @@ impl Interface {
     }
     fn ether_listen(sender: Sender<Packet>, slf: Arc<Interface>) -> () {
         loop {
+            let pack = match slf.recv() {
+                Ok(pack) => pack,
+                Err(ref e) if e.kind() == ErrorKind::WouldBlock => return,
+                Err(e) => panic!("Error while trying to recv: {e:?}"),
+            };
             let status = slf.status.lock().unwrap();
             match *status {
-                InterfaceStatus::Up => {
-                    mem::drop(status);
-                    let pack = match slf.recv() {
-                        Ok(pack) => pack,
-                        Err(ref e) if e.kind() == ErrorKind::WouldBlock => return,
-                        Err(e) => panic!("Error while trying to recv: {e:?}"),
-                    };
-                    sender.send(pack)
-                        .expect("Channel to almighty node disconnected");
-                }
-                InterfaceStatus::Down => {
-                    mem::drop(status);
-                    thread::sleep(Duration::from_millis(100));
-                }
+                InterfaceStatus::Up => sender.send(pack).expect("Channel to almighty node disconnected"),
+                InterfaceStatus::Down => {}
             }
         }
     }
