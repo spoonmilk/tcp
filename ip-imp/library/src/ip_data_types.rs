@@ -1,7 +1,7 @@
 use crate::prelude::*;
 use crate::rip_utils::*;
 use crate::utils::*;
-use std::io::{Error, ErrorKind};
+use std::io::{ Error, ErrorKind };
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum NodeType {
@@ -19,8 +19,8 @@ pub struct Node {
     interface_reps: HashMap<String, InterfaceRep>, //Maps an interface's name to its associated InterfaceRep
     forwarding_table: HashMap<Ipv4Net, Route>,
     rip_neighbors: HashMap<Ipv4Addr, Vec<Route>>, // Stores route information learned about from neighbors
-                                                  // RIP neighbors vec
-                                                  // Timeout table(?)
+    // RIP neighbors vec
+    // Timeout table(?)
 }
 
 impl Node {
@@ -29,7 +29,7 @@ impl Node {
         //interfaces: Vec<Interface>,
         interface_reps: HashMap<String, InterfaceRep>,
         forwarding_table: HashMap<Ipv4Net, Route>,
-        rip_neighbors: HashMap<Ipv4Addr, Vec<Route>>,
+        rip_neighbors: HashMap<Ipv4Addr, Vec<Route>>
     ) -> Node {
         Node {
             n_type,
@@ -105,14 +105,14 @@ impl Node {
                         route.cost = Some(16);
                         to_remove.push(prefix.clone()); //Clone used to avoid stinky borrowing issues
                     }
-                    _ => { }
+                    _ => {}
                 }
             }
             if !to_remove.is_empty() {
                 slf.rip_broadcast();
                 to_remove.iter().for_each(|prf| {
                     slf.forwarding_table.remove(prf).expect("Something fishy");
-                })
+                });
             }
         }
     }
@@ -127,7 +127,7 @@ impl Node {
                     Ok(pack) => packets.push(pack), //Can't call slf.forward_packet(pack) directly here for ownership reasons
                     Err(TryRecvError::Empty) => {}
                     Err(TryRecvError::Disconnected) => {
-                        panic!("Channel disconnected for some reason")
+                        panic!("Channel disconnected for some reason");
                     }
                 }
             }
@@ -150,7 +150,7 @@ impl Node {
                 inter_rep.v_net.addr(),
                 inter_rep.v_net.prefix_len(),
                 status
-            )
+            );
         }
     }
     /// List neighbors of a node
@@ -158,10 +158,7 @@ impl Node {
         println!("Iface\tVIP\t\tUDPAddr");
         for inter_rep in self.interface_reps.values() {
             for neighbor in &inter_rep.neighbors {
-                println!(
-                    "{}\t{}\t127.0.0.1:{}",
-                    inter_rep.name, neighbor.0, neighbor.1
-                );
+                println!("{}\t{}\t127.0.0.1:{}", inter_rep.name, neighbor.0, neighbor.1);
             }
         }
     }
@@ -176,48 +173,57 @@ impl Node {
             let next_hop = match &route.next_hop {
                 ForwardingOption::Ip(ip) => ip.to_string(),
                 ForwardingOption::Inter(inter) => "LOCAL:".to_string() + inter,
-                ForwardingOption::ToSelf => continue, //Skip because don't print routes to self
+                ForwardingOption::ToSelf => {
+                    continue;
+                } //Skip because don't print routes to self
             };
             let r_type = match route.rtype {
                 RouteType::Rip => "R",
                 RouteType::Local => "L",
                 RouteType::Static => "S",
-                RouteType::ToSelf => continue, //Should never get here
+                RouteType::ToSelf => {
+                    continue;
+                } //Should never get here
             };
-            println!(
-                "{}\t{}/{}\t{}\t{}",
-                r_type,
-                v_net.addr(),
-                v_net.prefix_len(),
-                next_hop,
-                cost
-            )
+            println!("{}\t{}/{}\t{}\t{}", r_type, v_net.addr(), v_net.prefix_len(), next_hop, cost);
         }
     }
     /// Enable an interface
     fn up(&mut self, inter: String) -> () {
-        let inter_rep = self.interface_reps.get_mut(&inter).unwrap();
-        match inter_rep.status {
-            InterfaceStatus::Up => {} //Don't do anything if already up
-            InterfaceStatus::Down => {
-                inter_rep
-                    .command(InterCmd::ToggleStatus)
-                    .expect("Error connecting to interface");
-                inter_rep.status = InterfaceStatus::Up;
+        match self.interface_reps.get_mut(&inter) {
+            Some(inter_rep) => {
+                match inter_rep.status {
+                    InterfaceStatus::Down => {
+                        inter_rep
+                            .command(InterCmd::ToggleStatus)
+                            .expect("Error connecting to interface");
+                        inter_rep.status = InterfaceStatus::Up;
+                    }
+                    InterfaceStatus::Up => {} //Don't do anything if already up
+                }
+            }
+            None => {
+                println!("Couldn't find interface: {}", inter);
             }
         }
     }
     /// Disable an interface
     fn down(&mut self, inter: String) -> () {
-        let inter_rep = self.interface_reps.get_mut(&inter).unwrap();
-        match inter_rep.status {
-            InterfaceStatus::Up => {
-                inter_rep
-                    .command(InterCmd::ToggleStatus)
-                    .expect("Error connecting to interface");
-                inter_rep.status = InterfaceStatus::Down;
+        match self.interface_reps.get_mut(&inter) {
+            Some(inter_rep) => {
+                match inter_rep.status {
+                    InterfaceStatus::Up => {
+                        inter_rep
+                            .command(InterCmd::ToggleStatus)
+                            .expect("Error connecting to interface");
+                        inter_rep.status = InterfaceStatus::Down;
+                    }
+                    InterfaceStatus::Down => {} //Don't do anything if already down
+                }
             }
-            InterfaceStatus::Down => {} //Don't do anything if already down
+            None => {
+                println!("Couldn't find interface: {}", inter);
+            }
         }
     }
     /// Send a packet generated by the node
@@ -235,7 +241,7 @@ impl Node {
                 destination: self.interface_reps.get("if0").unwrap().v_ip.octets(),
                 time_to_live: 16,
                 total_len: Ipv4Header::MIN_LEN_U16 + (pb.msg.len() as u16),
-                protocol: 0.into(),
+                protocol: (0).into(),
                 ..Default::default()
             };
             let pack = Packet {
@@ -243,22 +249,19 @@ impl Node {
                 data: pb.msg.clone(),
             };
             self.process_packet(pack);
-        }
-        else {
-
+        } else {
             let (inter_rep, next_hop) = match self.proper_interface(&ip_addr) {
-                Ok(Some((name, next_hop))) => (
-                    self.interface_reps.get_mut(&name.clone()).unwrap(),
-                    next_hop,
-                ),
+                Ok(Some((name, next_hop))) =>
+                    (self.interface_reps.get_mut(&name.clone()).unwrap(), next_hop),
                 Ok(None) => {
-                panic!("No interface found for address: {}", addr);
-                } 
+                    panic!("No interface found for address: {}", addr);
+                }
                 Err(e) => {
                     panic!("\nForwarding table entry for address not found: {e:?}");
                 }
             };
-            if msg_type { // true = test packet, false = RIP
+            if msg_type {
+                // true = test packet, false = RIP
                 println!("Sending test packet to next hop: {}", next_hop);
                 inter_rep
                     .command(InterCmd::BuildSend(pb, next_hop, true))
@@ -277,18 +280,19 @@ impl Node {
         //Run it through check_packet to see if it should be dropped
         if !Node::packet_valid(pack.clone()) {
             return Ok(());
-        };
+        }
         let pack = Node::update_pack(pack);
         let pack_header = pack.clone().header;
         //Get the proper interface's name
-        let (inter_rep_name, next_hop) =
-            match self.proper_interface(&Ipv4Addr::from(pack_header.destination))? {
-                Some((name, next_hop)) => (name, next_hop),
-                None => {
-                    self.process_packet(pack);
-                    return Ok(());
-                }
-            };
+        let (inter_rep_name, next_hop) = match
+            self.proper_interface(&Ipv4Addr::from(pack_header.destination))?
+        {
+            Some((name, next_hop)) => (name, next_hop),
+            None => {
+                self.process_packet(pack);
+                return Ok(());
+            }
+        };
         //Find the proper interface and hand the packet off to it
         let inter_rep_name = inter_rep_name.clone(); //Why? To get around stinkin Rust borrow checker. Get rid of this line (and the borrow on the next) to see why. Ugh
         let inter_rep = self.interface_reps.get_mut(&inter_rep_name).unwrap();
@@ -310,9 +314,13 @@ impl Node {
             let route = self.forwarding_table.get(&netmask).unwrap();
             //If it's an Ip address, repeat with that IP address, an interface, forward via channel to that interface, if it is a ToSelf, handle internally
             dst_ip = match &route.next_hop {
-                ForwardingOption::Inter(name) => break Ok(Some((name, dst_ip.clone()))),
+                ForwardingOption::Inter(name) => {
+                    break Ok(Some((name, dst_ip.clone())));
+                }
                 ForwardingOption::Ip(ip) => ip,
-                ForwardingOption::ToSelf => break Ok(None),
+                ForwardingOption::ToSelf => {
+                    break Ok(None);
+                }
             };
         }
     }
@@ -355,19 +363,18 @@ impl Node {
     /// Longest prefix matching for packet forwarding
     fn longest_prefix(prefixes: Vec<&Ipv4Net>, addr: &Ipv4Addr) -> Result<Ipv4Net> {
         if prefixes.len() < 1 {
-            return Err(Error::new(
-                ErrorKind::Other,
-                "No prefixes to search through",
-            ));
+            return Err(Error::new(ErrorKind::Other, "No prefixes to search through"));
         }
         let mut current_longest: Option<Ipv4Net> = None;
         for prefix in prefixes {
             if prefix.contains(addr) {
                 match current_longest {
                     Some(curr_prefix) if curr_prefix.prefix_len() < prefix.prefix_len() => {
-                        current_longest = Some(prefix.clone())
+                        current_longest = Some(prefix.clone());
                     }
-                    None => current_longest = Some(prefix.clone()),
+                    None => {
+                        current_longest = Some(prefix.clone());
+                    }
                     _ => {}
                 }
             }
@@ -390,7 +397,10 @@ impl Node {
                 let msg = String::from_utf8(pack.data).unwrap();
                 let retstr = format!(
                     "Received tst packet: Src: {}, Dst: {}, TTL: {}, {}",
-                    src, dst, ttl, msg
+                    src,
+                    dst,
+                    ttl,
+                    msg
                 );
                 println!("{}", retstr);
             }
@@ -466,12 +476,14 @@ impl Node {
         let mut rip_routes: Vec<RipRoute> = Vec::new();
         for (mask, route) in &self.forwarding_table {
             match route.rtype {
-                RouteType::ToSelf | RouteType::Static => continue,
+                RouteType::ToSelf | RouteType::Static => {
+                    continue;
+                }
                 _ => {
                     let rip_route = RipRoute::new(
                         route.cost.clone().unwrap(),
                         mask.clone().addr().into(),
-                        mask.clone().netmask().into(),
+                        mask.clone().netmask().into()
                     );
                     rip_routes.push(rip_route);
                 }
