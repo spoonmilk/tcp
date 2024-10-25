@@ -160,23 +160,16 @@ impl Interface {
     }
     fn node_listen(receiver: Receiver<InterCmd>, slf: Arc<Interface>) -> () {
         loop {
-            match receiver.recv() {
-                Ok(InterCmd::BuildSend(pb, next_hop, msg_type)) => {
-                    let status = slf.status.lock().unwrap();
-                    if let InterfaceStatus::Up = *status {
-                        let builded = slf.build(pb, msg_type);
-                        slf.send(builded, next_hop)
-                            .expect("Error sending packet");
-                    }
+            let received = receiver.recv();
+            let status = slf.status.lock().unwrap();
+            match received {
+                Ok(InterCmd::BuildSend(pb, next_hop, msg_type)) if matches!(*status, InterfaceStatus::Up) => {
+                    let builded = slf.build(pb, msg_type);
+                    slf.send(builded, next_hop).expect("Error sending packet");
                 }
-                Ok(InterCmd::Send(pack, next_hop)) => {
-                    let status = slf.status.lock().unwrap();
-                    if let InterfaceStatus::Up = *status {
-                        slf.send(pack, next_hop)
-                            .expect("Error sending packet");
-                    }
-                }
+                Ok(InterCmd::Send(pack, next_hop)) if matches!(*status, InterfaceStatus::Up) => slf.send(pack, next_hop).expect("Error sending packet"),
                 Ok(InterCmd::ToggleStatus) => Interface::toggle_status(&slf),
+                Ok(_) => { println!("I'm down - don't tell me to send crap!"); } //We're currently down, can't send stuff - sorry
                 Err(e) => panic!("Error Receiving from almighty node: {e:?}"),
             }
         }
