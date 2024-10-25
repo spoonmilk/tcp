@@ -132,7 +132,12 @@ impl Node {
                 }
             }
             for pack in packets {
-                slf.forward_packet(pack).expect("Error forwarding packet");
+                match slf.forward_packet(pack) {
+                    Ok(_) => {}
+                    Err(e) => {
+                        eprintln!("Error forwarding packet: {e:?}");
+                    }
+                }
             }
         }
     }
