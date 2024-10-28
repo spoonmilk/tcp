@@ -125,7 +125,10 @@ pub fn route_update(
     rip_rt: &mut RipRoute,
     fwd_table: &mut HashMap<Ipv4Net, Route>,
     next_hop: &Ipv4Addr,
-) {
+) -> bool {
+
+    let mut updated = false;
+
     let rip_net =
         Ipv4Net::with_netmask(Ipv4Addr::from(rip_rt.address), Ipv4Addr::from(rip_rt.mask))
             .unwrap();
@@ -141,9 +144,11 @@ pub fn route_update(
             match prev_route.cost {
                 Some(cost) => {
                     if cost > rip_rt.cost {
+                        updated = true;
                         // If lower cost, change next hop
                         fwd_table.insert(rip_net, rip_to_route(rip_rt, next_hop));
                     } else if prev_route.next_hop == ForwardingOption::Ip(Ipv4Addr::from(rip_rt.address)) {
+                        updated = true;
                         // Network topology has changed
                         fwd_table.insert(rip_net, rip_to_route(rip_rt, next_hop));
                     } else {} //NOTHING IS ADDED
@@ -153,6 +158,7 @@ pub fn route_update(
         }
         None => { fwd_table.insert(rip_net, rip_to_route(rip_rt, next_hop)); }
     }
+    return updated;
 }
 
 fn get_route(prefix: &Ipv4Net, fwd_table: &HashMap<Ipv4Net, Route>) -> Option<Route> {
