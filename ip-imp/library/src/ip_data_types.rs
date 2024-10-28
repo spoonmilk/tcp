@@ -417,11 +417,12 @@ impl Node {
                 match rip_msg.command {
                     1 => {
                         // Received a routing request
-                        self.send_rip(src_ip, 2); // Send a routing response
+                        self.rip_respond(src_ip, None); // Send a routing response
                     }
                     2 => {
                         // Received a routing response
-                        self.update_fwd_table(&mut rip_msg, src_ip); // Update the forwarding table according to the response
+                        let changed_routes = self.update_fwd_table(&mut rip_msg, src_ip); // Update the forwarding table according to the response
+                        self.triggered_update(changed_routes);
                     }
                     _ => panic!("Unsupported RIP command received"),
                 }
@@ -436,34 +437,35 @@ impl Node {
             .collect::<Vec<String>>()
             .join(".")
     }
-    fn send_rip(&mut self, dst: Ipv4Addr, command: u16) -> () {
-        match command {
-            1 => {
-                // Send a routing request
-                // println!("Sending RIP request to neighbor {}", dst);
-                let rip_req_msg: RipMsg = RipMsg::new(1, 0, Vec::new());
-                let ser_req_rip: Vec<u8> = serialize_rip(rip_req_msg);
-                self.send(dst.to_string(), ser_req_rip, false);
-            }
-            2 => {
-                // Send a routing response
-                // println!("Sending RIP response to neighbor {}", dst);
-                let rip_resp_msg: RipMsg = self.table_to_rip();
-                let ser_resp_rip: Vec<u8> = serialize_rip(rip_resp_msg.clone());
-                self.send(dst.to_string(), ser_resp_rip, false);
-            }
-            _ => panic!("Invalid RIP command type!"),
-        }
+    fn rip_respond(&mut self, dst: Ipv4Addr, nets: Option<&Vec<Ipv4Net>>) -> () {
+        // Send a routing response
+        // println!("Sending RIP response to neighbor {}", dst);
+        let rip_resp_msg: RipMsg = self.table_to_rip(nets);
+        let ser_resp_rip: Vec<u8> = serialize_rip(rip_resp_msg.clone());
+        self.send(dst.to_string(), ser_resp_rip, false);
     }
     fn rip_broadcast(&mut self) -> () {
         // For periodic and triggered updates
         let keys: Vec<Ipv4Addr> = self.rip_neighbors.keys().cloned().collect(); // So tired of this ownership bullshit
         for addr in keys {
-            self.send_rip(addr, 2);
+            self.rip_respond(addr, None);
+        }
+    }
+    fn triggered_update(&mut self, changed_routes: Option<Vec<Ipv4Net>>) -> () {
+        match changed_routes {
+            Some(changed_routes) => {
+                let keys: Vec<Ipv4Addr> = self.rip_neighbors.keys().cloned().collect(); // So tired of this ownership bullshit
+                for addr in keys {
+                    self.rip_respond(addr, Some(&changed_routes));
+                }
+            }
+            None => {}
         }
     }
     fn rip_request(&mut self, dst: Ipv4Addr) -> () {
-        self.send_rip(dst, 1);
+        let rip_req_msg: RipMsg = RipMsg::new(1, 0, Vec::new());
+        let ser_req_rip: Vec<u8> = serialize_rip(rip_req_msg);
+        self.send(dst.to_string(), ser_req_rip, false);
     }
     fn request_all(&mut self) -> () {
         let keys: Vec<Ipv4Addr> = self.rip_neighbors.keys().cloned().collect(); // So tired of this ownership bullshit
@@ -471,23 +473,31 @@ impl Node {
             self.rip_request(addr);
         }
     }
-    /// Updates a node's RIP table according to a RIP message
-    fn update_fwd_table(&mut self, rip_msg: &mut RipMsg, next_hop: Ipv4Addr) -> bool {
-        let mut updated = false;
+    /// Updates a node's RIP table according to a RIP message - returns None if nothing gets changed
+    fn update_fwd_table(&mut self, rip_msg: &mut RipMsg, next_hop: Ipv4Addr) -> Option<Vec<Ipv4Net>> {
+        let mut updated = Vec::new();
         for route in &mut rip_msg.routes {
-            if route_update(route, &mut self.forwarding_table, &next_hop) {
-                updated = true;
+            match route_update(route, &mut self.forwarding_table, &next_hop) {
+                Some(net) => updated.push(net),
+                None => {}
             }
         }
-        return updated;
+        if !updated.is_empty() { Some(updated) }
+        else { None }
     }
-    pub fn table_to_rip(&mut self) -> RipMsg {
+    pub fn table_to_rip(&mut self, nets: Option<&Vec<Ipv4Net>>) -> RipMsg {
         let mut rip_routes: Vec<RipRoute> = Vec::new();
-        for (mask, route) in &self.forwarding_table {
+        let table = match nets {
+            Some(nets) => {
+                let mut ftable_subset = HashMap::new();
+                nets.iter().for_each(|net| { ftable_subset.insert(net, self.forwarding_table.get(net).expect("Internal Failure: net should def be in the fwding table")); });
+                ftable_subset
+            }
+            None => self.forwarding_table.iter().map(|(key, val)| (key, val)).collect() //Weird ownership wizardry
+        };
+        for (mask, route) in table {
             match route.rtype {
-                RouteType::ToSelf | RouteType::Static => {
-                    continue;
-                }
+                RouteType::ToSelf | RouteType::Static => continue,
                 _ => {
                     let rip_route = RipRoute::new(
                         route.cost.clone().unwrap(),

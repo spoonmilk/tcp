@@ -125,40 +125,31 @@ pub fn route_update(
     rip_rt: &mut RipRoute,
     fwd_table: &mut HashMap<Ipv4Net, Route>,
     next_hop: &Ipv4Addr,
-) -> bool {
-
-    let mut updated = false;
-
+) -> Option<Ipv4Net> {
     let rip_net =
         Ipv4Net::with_netmask(Ipv4Addr::from(rip_rt.address), Ipv4Addr::from(rip_rt.mask))
             .unwrap();
-            //.trunc();
-    // for debug
-    // let thing = rip_to_route(rip_rt, next_hop);
-    // println!("{:?}", rip_net);
-    // println!("{:?}", thing);
     rip_rt.cost = rip_rt.cost + 1;
     match get_route(&rip_net, &fwd_table) {
         Some(prev_route) if prev_route.next_hop == ForwardingOption::ToSelf => panic!("Route to self should not be encountered in update"),
         Some(prev_route) => {
             match prev_route.cost {
                 Some(cost) => {
-                    if cost > rip_rt.cost {
-                        updated = true;
-                        // If lower cost, change next hop
+                    if cost > rip_rt.cost || prev_route.next_hop == ForwardingOption::Ip(Ipv4Addr::from(rip_rt.address)) {
+                        // If lower cost OR network topology has changed, change next hop
                         fwd_table.insert(rip_net, rip_to_route(rip_rt, next_hop));
-                    } else if prev_route.next_hop == ForwardingOption::Ip(Ipv4Addr::from(rip_rt.address)) {
-                        updated = true;
-                        // Network topology has changed
-                        fwd_table.insert(rip_net, rip_to_route(rip_rt, next_hop));
-                    } else {} //NOTHING IS ADDED
+                        Some(rip_net)
+                    } else { None } //NOTHING IS ADDED
                 }
                 None => panic!("Route cost should not be None"), // Route is to self, do nothing
             }
         }
-        None => { fwd_table.insert(rip_net, rip_to_route(rip_rt, next_hop)); }
+        None => { 
+            // If not contained in our table, add it
+            fwd_table.insert(rip_net, rip_to_route(rip_rt, next_hop));
+            Some(rip_net)
+         }
     }
-    return updated;
 }
 
 fn get_route(prefix: &Ipv4Net, fwd_table: &HashMap<Ipv4Net, Route>) -> Option<Route> {
