@@ -19,3 +19,6 @@
 ./router
 ./vrouter
 
+# Generated nets
+**/linear-r1h2
+
