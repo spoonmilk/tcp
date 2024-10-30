@@ -46,7 +46,7 @@ impl RipRoute {
 // Constructing RIP packets
 
 // Things we should add
-// New Node field
+// New IPDaemon field
 
 pub fn poison_routes(
     routes: Vec<RipRoute>,

@@ -1,5 +1,10 @@
 use crate::prelude::*;
 
+pub type ForwardingTable = HashMap<Ipv4Net, Route>;
+pub type InterfaceTable = HashMap<String, InterfaceRep>;
+pub type RipNeighbors = HashMap<Ipv4Addr, Vec<Route>>;
+//type SocketTable = ...?
+
 //Used as values of the forwarding table hashmap held by nodes
 #[derive(Debug, Clone, PartialEq)]
 pub struct Route {
@@ -76,7 +81,7 @@ impl InterfaceRep {
             chan,
         }
     }
-    pub fn command(&mut self, cmd: InterCmd) -> result::Result<(), SendError<InterCmd>> {
+    pub fn command(&self, cmd: InterCmd) -> result::Result<(), SendError<InterCmd>> {
         //Sends the input command to the interface
         self.chan.send.send(cmd)
     }

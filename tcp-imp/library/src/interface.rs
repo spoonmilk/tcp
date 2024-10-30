@@ -3,11 +3,7 @@ use crate::utils::*;
 
 #[derive(Debug)]
 pub struct Interface {
-    pub name: String,
     pub v_ip: Ipv4Addr,
-    pub v_net: Ipv4Net,
-    pub udp_addr: Ipv4Addr,
-    pub udp_port: u16,
     pub neighbors: HashMap<Ipv4Addr, u16>,
     pub status: Mutex<InterfaceStatus>, //Only non-static field - represents current status of the interface
     pub udp_sock: UdpSocket
@@ -15,19 +11,12 @@ pub struct Interface {
 
 impl Interface {
     pub fn new(
-        name: String,
         v_ip: Ipv4Addr,
-        v_net: Ipv4Net,
-        udp_addr: Ipv4Addr,
-        udp_port: u16,
         neighbors: HashMap<Ipv4Addr, u16>,
+        udp_port: u16
     ) -> Interface {
         Interface {
-            name,
             v_ip,
-            v_net,
-            udp_addr,
-            udp_port,
             neighbors,
             status: Mutex::new(InterfaceStatus::Up), //Status always starts as Up
             udp_sock: UdpSocket::bind(format!("127.0.0.1:{}", udp_port)).expect("Unable to bind to port")
@@ -37,7 +26,7 @@ impl Interface {
         //Make arc of self and clone
         let slf_arc1 = Arc::new(self);
         let slf_arc2 = Arc::clone(&slf_arc1);
-        //Unpack BiChan and listen for node commands and packets coming across the network
+        //Unpack BiChan and listen for IPDaemon commands and packets coming across the network
         let sender = chan.send;
         let receiver = chan.recv;
         thread::spawn(move || Interface::node_listen(receiver, slf_arc1));
@@ -55,7 +44,7 @@ impl Interface {
                 Ok(InterCmd::Send(pack, next_hop)) if matches!(*status, InterfaceStatus::Up) => slf.send(pack, next_hop).expect("Error sending packet"),
                 Ok(InterCmd::ToggleStatus) => Interface::toggle_status(&slf),
                 Ok(_) => { println!("I'm down - don't tell me to send crap!"); } //We're currently down, can't send stuff - sorry
-                Err(e) => panic!("Error Receiving from almighty node: {e:?}"),
+                Err(e) => panic!("Error Receiving from almighty IPDaemon: {e:?}"),
             }
         }
     }
@@ -68,7 +57,7 @@ impl Interface {
             };
             let status = slf.status.lock().unwrap();
             match *status {
-                InterfaceStatus::Up => sender.send(pack).expect("Channel to almighty node disconnected"),
+                InterfaceStatus::Up => sender.send(pack).expect("Channel to almighty IPDaemon disconnected"),
                 InterfaceStatus::Down => {}
             }
         }
