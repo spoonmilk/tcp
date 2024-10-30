@@ -1,9 +1,0 @@
-[package]
-name = "vnode"
-version = "0.1.0"
-edition = "2021"
-
-[dependencies]
-library = { path = "../library" }
-lnxparser = { path = "../lnxparser" }
-rustyline = "14.0.0"
