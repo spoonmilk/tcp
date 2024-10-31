@@ -31,7 +31,8 @@ impl HostBackend {
 
 pub struct RouterBackend {
     interface_reps: Arc<RwLock<InterfaceTable>>,
-    forwarding_table: Arc<RwLock<ForwardingTable>>
+    forwarding_table: Arc<RwLock<ForwardingTable>>,
+    ip_sender: Sender<PacketBasis>
     //NO SOCKET TABLE NEEDED
 }
 
@@ -40,12 +41,12 @@ impl VnodeBackend for RouterBackend {
     fn interface_reps_mut(&self) -> RwLockWriteGuard<InterfaceTable> { self.interface_reps.write().unwrap() }
     fn forwarding_table(&self) -> RwLockReadGuard<ForwardingTable> { self.forwarding_table.read().unwrap() }
     fn send(&self, addr: String, msg: String) -> () {
-        //Send directly to IPDaemon over channel 
+        //Send directly to IPDaemon over channel
     }
 }
 
 impl RouterBackend {
-    pub fn new(interface_reps: Arc<RwLock<InterfaceTable>>, forwarding_table: Arc<RwLock<ForwardingTable>>) -> RouterBackend {
-        RouterBackend { interface_reps, forwarding_table }
+    pub fn new(interface_reps: Arc<RwLock<InterfaceTable>>, forwarding_table: Arc<RwLock<ForwardingTable>>, ip_sender: Sender<PacketBasis>) -> RouterBackend {
+        RouterBackend { interface_reps, forwarding_table, ip_sender }
     }
 }

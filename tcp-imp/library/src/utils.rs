@@ -132,7 +132,6 @@ pub enum InterfaceStatus {
 //Used for messages that a node sends to an interface
 #[derive(Debug)]
 pub enum InterCmd {
-    BuildSend(PacketBasis, Ipv4Addr, bool), //Build a packet using this PacketBasis and send it - when a send REPL command is used
     Send(Packet, Ipv4Addr),                 //Send this packet - when a packet is being forwarded
     ToggleStatus,                           //Make status down if up or up if down
 }
@@ -143,4 +142,23 @@ pub struct PacketBasis {
     pub dst_ip: Ipv4Addr,
     pub msg: Vec<u8>,
 }
+
+pub enum CmdType {
+    Li,
+    Ln,
+    Lr,
+    Up(String),
+    Down(String),
+    Send(String, String),
+}
+
+// TODO: GET HANDY WITH HANDLERS
+// type Handler(&Node, Packet) -> ()
+// HandlerTable: HashMap<IpNumber, Handler>
+// pub fn register_recv_handler(&mut self, type: IpNumber, function: Handler) -> {
+//     self.handlers.insert(type, function);
+// }
+// pub fn handle_rip(&self, node: &Node, packet: Packet) -> () {
+//    
+// }
 

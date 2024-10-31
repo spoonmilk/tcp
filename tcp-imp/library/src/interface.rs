@@ -37,10 +37,6 @@ impl Interface {
             let received = receiver.recv();
             let status = slf.status.lock().unwrap();
             match received {
-                Ok(InterCmd::BuildSend(pb, next_hop, msg_type)) if matches!(*status, InterfaceStatus::Up) => {
-                    let builded = slf.build(pb, msg_type);
-                    slf.send(builded, next_hop).expect("Error sending packet");
-                }
                 Ok(InterCmd::Send(pack, next_hop)) if matches!(*status, InterfaceStatus::Up) => slf.send(pack, next_hop).expect("Error sending packet"),
                 Ok(InterCmd::ToggleStatus) => Interface::toggle_status(&slf),
                 Ok(_) => { println!("I'm down - don't tell me to send crap!"); } //We're currently down, can't send stuff - sorry
@@ -72,31 +68,7 @@ impl Interface {
                 *status = InterfaceStatus::Up;
             }
         }
-    }
-    fn build(&self, pb: PacketBasis, msg_type: bool) -> Packet {
-        // Grabbing info from sending interface for header
-        let src_ip = self.v_ip;
-        let dst_ip = pb.dst_ip;
-        let ttl: u8 = 16; // Default TTL from handout
-                          // Instantiate payload
-        let payload: Vec<u8> = pb.msg;
-        let prot_num: IpNumber = if msg_type { 0.into() } else { 200.into() };
-        // Create the header
-        let mut header = Ipv4Header {
-            source: src_ip.octets(),
-            destination: dst_ip.octets(),
-            time_to_live: ttl,
-            total_len: Ipv4Header::MIN_LEN_U16 + (payload.len() as u16),
-            protocol: prot_num,
-            ..Default::default()
-        };
-        // Checksum
-        header.header_checksum = header.calc_header_checksum();
-        return Packet {
-            header,
-            data: payload,
-        }; // Packet built!
-    }
+    } 
     fn send(
         &self,
         pack: Packet,
