@@ -1,0 +1,295 @@
+use crate::prelude::*;
+use crate::utils::*;
+pub trait VnodeBackend {
+    //Getters
+    fn interface_reps(&self) -> RwLockReadGuard<InterfaceTable>;
+    fn interface_reps_mut(&self) -> RwLockWriteGuard<InterfaceTable>;
+    fn forwarding_table(&self) -> RwLockReadGuard<ForwardingTable>;
+    //send functionality will differ across hosts and routers
+    fn send(&self, addr: String, msg: String) -> ();
+    /// List interfaces of a node
+    fn li(&self) -> () {
+        println!("Name\tAddr/Prefix\tState");
+        for inter_rep in self.interface_reps().values() {
+            let status = match inter_rep.status {
+                InterfaceStatus::Up => "up",
+                InterfaceStatus::Down => "down",
+            };
+            println!(
+                "{}\t{}/{}\t{}",
+                inter_rep.name,
+                inter_rep.v_net.addr(),
+                inter_rep.v_net.prefix_len(),
+                status
+            );
+        }
+    }
+    /// List neighbors of a node
+    fn ln(&self) -> () {
+        println!("Iface\tVIP\t\tUDPAddr");
+        for inter_rep in self.interface_reps().values() {
+            for neighbor in &inter_rep.neighbors {
+                println!("{}\t{}\t127.0.0.1:{}", inter_rep.name, neighbor.0, neighbor.1);
+            }
+        }
+    }
+    /// List routes from a node
+    fn lr(&self) -> () {
+        println!("T\tPrefix\t\tNext hop\tCost");
+        for (v_net, route) in &*(self.forwarding_table()) {
+            let cost = match &route.cost {
+                Some(num) => num.to_string(),
+                None => String::from("-"),
+            };
+            let next_hop = match &route.next_hop {
+                ForwardingOption::Ip(ip) => ip.to_string(),
+                ForwardingOption::Inter(inter) => "LOCAL:".to_string() + inter,
+                ForwardingOption::ToSelf => {
+                    continue;
+                } //Skip because don't print routes to self
+            };
+            let r_type = match route.rtype {
+                RouteType::Rip => "R",
+                RouteType::Local => "L",
+                RouteType::Static => "S",
+                RouteType::ToSelf => {
+                    continue;
+                } //Should never get here
+            };
+            println!("{}\t{}/{}\t{}\t{}", r_type, v_net.addr(), v_net.prefix_len(), next_hop, cost);
+        }
+    }
+    /// Enable an interface
+    fn up(&mut self, inter: String) -> () {
+        match self.interface_reps_mut().get_mut(&inter) {
+            Some(inter_rep) => {
+                match inter_rep.status {
+                    InterfaceStatus::Down => {
+                        inter_rep
+                            .command(InterCmd::ToggleStatus)
+                            .expect("Error connecting to interface");
+                        inter_rep.status = InterfaceStatus::Up;
+                    }
+                    InterfaceStatus::Up => {} //Don't do anything if already up
+                }
+            }
+            None => {
+                println!("Couldn't find interface: {}", inter);
+            }
+        }
+    }
+    /// Disable an interface
+    fn down(&mut self, inter: String) -> () {
+        match self.interface_reps_mut().get_mut(&inter) {
+            Some(inter_rep) => {
+                match inter_rep.status {
+                    InterfaceStatus::Up => {
+                        inter_rep
+                            .command(InterCmd::ToggleStatus)
+                            .expect("Error connecting to interface");
+                        inter_rep.status = InterfaceStatus::Down;
+                    }
+                    InterfaceStatus::Down => {} //Don't do anything if already down
+                }
+            }
+            None => {
+                println!("Couldn't find interface: {}", inter);
+            }
+        }
+    }
+}
+
+pub trait VnodeIPDaemon {
+    //Getters
+    fn interface_reps(&self) -> RwLockReadGuard<InterfaceTable>;
+    fn interface_reps_mut(&self) -> RwLockWriteGuard<InterfaceTable>;
+    fn forwarding_table(&self) -> RwLockReadGuard<ForwardingTable>;
+    fn forwarding_table_mut(&self) -> RwLockWriteGuard<ForwardingTable>;
+    //fn rip_neighbors(&self) -> &RipNeighbors; - not needed because no rip functionality in here
+    //Process packet - will be different across host and router
+    fn process_packet(&mut self, pack: Packet) -> ();
+    
+    /// Listen for messages on node interfaces
+    fn interface_listen<T: VnodeIPDaemon>(slf_mutex: Arc<Mutex<T>>) -> () {
+        loop {
+            let mut packets = Vec::new();
+            let mut slf = slf_mutex.lock().unwrap();
+            for inter_rep in slf.interface_reps().values() {
+                let chan = &inter_rep.chan;
+                match chan.recv.try_recv() {
+                    Ok(pack) => packets.push(pack), //Can't call slf.forward_packet(pack) directly here for ownership reasons
+                    Err(TryRecvError::Empty) => {}
+                    Err(TryRecvError::Disconnected) => {
+                        panic!("Channel disconnected for some reason");
+                    }
+                }
+            }
+            for pack in packets {
+                match slf.forward_packet(pack) {
+                    Ok(_) => {}
+                    Err(e) => {
+                        eprintln!("Error forwarding packet: {e:?}");
+                    }
+                }
+            }
+        }
+    }
+    /// Send a packet generated by the node
+    fn send(&mut self, addr: String, msg: Vec<u8>, msg_type: bool) -> () {
+        let ip_addr = addr.as_str().parse().expect("Invalid ip address"); //FIX THIS LATER
+        let pb = PacketBasis {
+            dst_ip: ip_addr,
+            msg,
+        };
+
+        // If sent to self, just process!
+        if ip_addr == self.interface_reps().get("if0").unwrap().v_ip {
+            let header = Ipv4Header {
+                source: self.interface_reps().get("if0").unwrap().v_ip.octets(),
+                destination: self.interface_reps().get("if0").unwrap().v_ip.octets(),
+                time_to_live: 16,
+                total_len: Ipv4Header::MIN_LEN_U16 + (pb.msg.len() as u16),
+                protocol: (0).into(),
+                ..Default::default()
+            };
+            let pack = Packet {
+                header,
+                data: pb.msg.clone(),
+            };
+            self.process_packet(pack);
+        } else {
+            let (inter_rep, next_hop) = match self.proper_interface(&ip_addr) {
+                Ok(Some((name, next_hop))) =>
+                    (self.interface_reps_mut().get_mut(&name.clone()).unwrap(), next_hop),
+                Ok(None) => {
+                    panic!("No interface found for address: {}", addr);
+                }
+                Err(e) => {
+                    panic!("\nForwarding table entry for address not found: {e:?}");
+                }
+            };
+            if msg_type {
+                // true = test packet, false = RIP
+                println!("Sending test packet to next hop: {}", next_hop);
+                inter_rep
+                    .command(InterCmd::BuildSend(pb, next_hop, true))
+                    .expect("Error sending connecting to interface or sending packet");
+            } else {
+                inter_rep
+                    .command(InterCmd::BuildSend(pb, next_hop, false))
+                    .expect("Error sending connecting to interface or sending packet");
+            }
+        }
+    }
+    /// Forward a packet to the node or to the next hop
+    fn forward_packet(&mut self, pack: Packet) -> Result<()> {
+        //std::result::Result<(), SendError<InterCmd>> {
+        //Made it  cause it'll give some efficiency gains with sending through the channel (I think)
+        //Run it through check_packet to see if it should be dropped
+        if !<Self as VnodeIPDaemon>::packet_valid(pack.clone()) {
+            return Ok(());
+        }
+        let pack = <Self as VnodeIPDaemon>::update_pack(pack);
+        let pack_header = pack.clone().header;
+        //Get the proper interface's name
+        let (inter_rep_name, next_hop) = match
+            self.proper_interface(&Ipv4Addr::from(pack_header.destination))?
+        {
+            Some((name, next_hop)) => (name, next_hop),
+            None => {
+                self.process_packet(pack);
+                return Ok(());
+            }
+        };
+        //Find the proper interface and hand the packet off to it
+        let inter_rep_name = inter_rep_name.clone(); //Why? To get around stinkin Rust borrow checker. Get rid of this line (and the borrow on the next) to see why. Ugh
+        let binding = self.interface_reps();
+        let inter_rep = binding.get(&inter_rep_name).unwrap();
+        // Using to show route through nodes
+        println!("Forwarding packet to interface: {}", inter_rep_name);
+        match inter_rep.command(InterCmd::Send(pack, next_hop)) {
+            Ok(()) => Ok(()),
+            Err(_) => Err(Error::new(ErrorKind::Other, "Send Error")),
+        }
+    }
+    /// Find the interface to forward a packet to
+    fn proper_interface(&self, dst_addr: &Ipv4Addr) -> Result<Option<(String, Ipv4Addr)>> {
+        let mut dst_ip = dst_addr;
+        //See what the value tied to that prefix is
+        let table_lock = self.forwarding_table();
+        loop {
+            //Loop until bottom out at a route that sends to an interface
+            //Run it through longest prefix
+            let netmask = <Self as VnodeIPDaemon>::longest_prefix(self.forwarding_table().keys().collect(), dst_ip)?;
+            let route = table_lock.get(&netmask).unwrap();
+            //If it's an Ip address, repeat with that IP address, an interface, forward via channel to that interface, if it is a ToSelf, handle internally
+            dst_ip = match &route.next_hop {
+                ForwardingOption::Inter(name) => break Ok(Some((name.clone(), dst_ip.clone()))),
+                ForwardingOption::Ip(ip) => ip,
+                ForwardingOption::ToSelf => {
+                    break Ok(None);
+                }
+            };
+        }
+    }
+    /// Check the validity of a packet
+    fn packet_valid(pack: Packet) -> bool {
+        // Get header
+        let pack_head: Ipv4Header = pack.header;
+
+        // Obtain ttl, check if not zero
+        let ttl = pack_head.time_to_live;
+        if ttl == 0 {
+            return false;
+        }
+
+        // Obtain checksum, check if correct calculation
+        let checksum = pack_head.header_checksum;
+        let checksum_correct = pack_head.calc_header_checksum();
+        return checksum == checksum_correct;
+    }
+    /// Update packet checksum and info
+    fn update_pack(pack: Packet) -> Packet {
+        // Get header
+        let mut pack_head: Ipv4Header = pack.header;
+        // Decrement ttl
+        let ttl = pack_head.time_to_live;
+        if ttl != 0 {
+            pack_head.time_to_live = ttl - 1;
+        } else {
+            eprintln!("Encountered a packet with invalid TTL ; something is wrong");
+        }
+        pack_head.header_checksum = pack_head.calc_header_checksum();
+
+        // Rebuild packet
+        let updated_pack: Packet = Packet {
+            header: pack_head,
+            data: pack.data,
+        };
+        return updated_pack;
+    }
+    /// Longest prefix matching for packet forwarding
+    fn longest_prefix(prefixes: Vec<&Ipv4Net>, addr: &Ipv4Addr) -> Result<Ipv4Net> {
+        if prefixes.len() < 1 {
+            return Err(Error::new(ErrorKind::Other, "No prefixes to search through"));
+        }
+        let mut current_longest: Option<Ipv4Net> = None;
+        for prefix in prefixes {
+            if prefix.contains(addr) {
+                match current_longest {
+                    Some(curr_prefix) if curr_prefix.prefix_len() < prefix.prefix_len() => {
+                        current_longest = Some(prefix.clone());
+                    }
+                    None => {
+                        current_longest = Some(prefix.clone());
+                    }
+                    _ => {}
+                }
+            }
+        }
+        match current_longest {
+            Some(prefix) => Ok(prefix),
+            None => Err(Error::new(ErrorKind::Other, "No matching prefix found")),
+        }
+    }
+}

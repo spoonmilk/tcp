@@ -18,6 +18,7 @@ mod utils; //pub for testing purposes - should change back on deployment
 mod interface;
 mod vnode_traits;
 pub mod config;
+pub mod backends;
 pub mod router;
 pub mod ip_daemon;
 pub mod rip_utils;
