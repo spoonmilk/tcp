@@ -123,7 +123,7 @@ fn rip_to_route(rip_msg: &mut RipRoute, next_hop: &Ipv4Addr) -> Route {
 /// Updates an entry in a node's RIP table according to a RIP route
 pub fn route_update(
     rip_rt: &mut RipRoute,
-    fwd_table: &mut HashMap<Ipv4Net, Route>,
+    mut fwd_table: RwLockWriteGuard<ForwardingTable>,
     next_hop: &Ipv4Addr,
 ) -> Option<Ipv4Net> {
     let rip_net =

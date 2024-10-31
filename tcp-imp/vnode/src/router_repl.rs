@@ -4,6 +4,7 @@ use library::backends::RouterBackend;
 use library::vnode_traits::VnodeBackend;
 use library::utils::PacketBasis;
 use std::sync::mpsc::Receiver;
+use std::thread;
 
 pub fn run_app(backend: RouterBackend, ip_recver: Receiver<String>) -> () {
     thread::spawn(move || run_repl(backend));
@@ -50,9 +51,14 @@ fn execute_command(cmd: String, backend: &RouterBackend) -> result::Result<(), S
         "down" => backend.down(args.remove(0)),
         "send" => {
             let parsed = parse_send(&mut args);
-            backend.send(parsed.0, parsed.1)
+            let dst_ip = match Ipv4Addr::try_from(parsed.0) {
+                Ok(ip_addr) => ip_addr,
+                Err(_) => return Err(format!("Input IP address is not a valid IP address"))
+            };
+            let pb = PacketBasis { dst_ip, prot_num: 0, msg: parsed.1 };
+            backend.raw_send(pb)
         }
-        _ => return Err(String::from(format!("\"{cmd:?}\" is not a valid command"))),
+        _ => return Err(format!("\"{cmd:?}\" is not a valid command")),
     };
     Ok(())
 }

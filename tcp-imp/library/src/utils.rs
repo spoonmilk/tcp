@@ -140,6 +140,7 @@ pub enum InterCmd {
 #[derive(Debug, Clone)]
 pub struct PacketBasis {
     pub dst_ip: Ipv4Addr,
+    pub prot_num: u8,
     pub msg: Vec<u8>,
 }
 

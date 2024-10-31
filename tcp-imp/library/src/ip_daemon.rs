@@ -269,7 +269,7 @@ impl IPDaemon {
                 inter_rep
                     .command(InterCmd::BuildSend(pb, next_hop, false))
                     .expect("Error sending connecting to interface or sending packet");
-            }
+            }    
         }
     }
     /// Forward a packet to the node or to the next hop
