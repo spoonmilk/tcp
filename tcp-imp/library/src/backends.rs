@@ -2,7 +2,13 @@ use crate::prelude::*;
 use crate::utils::*;
 use crate::vnode_traits::*;
 
-struct HostBackend {
+//I'm thinking that initialize() will now return a Backend, so it'll need this
+pub enum Backend {
+    Host(HostBackend),
+    Router(RouterBackend)
+}
+
+pub struct HostBackend {
     interface_reps: Arc<RwLock<InterfaceTable>>,
     forwarding_table: Arc<RwLock<ForwardingTable>>
     //socket_table - coming soon
@@ -23,7 +29,7 @@ impl HostBackend {
     }
 }
 
-struct RouterBackend {
+pub struct RouterBackend {
     interface_reps: Arc<RwLock<InterfaceTable>>,
     forwarding_table: Arc<RwLock<ForwardingTable>>
     //NO SOCKET TABLE NEEDED

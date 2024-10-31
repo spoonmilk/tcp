@@ -1,8 +1,9 @@
 use crate::prelude::*;
 
 pub type ForwardingTable = HashMap<Ipv4Net, Route>;
-pub type InterfaceTable = HashMap<String, InterfaceRep>;
-pub type RipNeighbors = HashMap<Ipv4Addr, Vec<Route>>;
+pub type InterfaceTable = HashMap<String, InterfaceRep>; //Is shared via Arc<RwLock<>>
+pub type InterfaceRecvers = HashMap<String, Receiver<Packet>>; //NEVER shared - only IPDaemon has this
+pub type RipNeighbors = HashMap<Ipv4Addr, Vec<Route>>; 
 //type SocketTable = ...?
 
 //Used as values of the forwarding table hashmap held by nodes
@@ -53,6 +54,40 @@ pub struct BiChan<T, U> {
     pub recv: Receiver<U>,
 }
 
+#[derive(Debug)]
+pub struct InterfaceRep {
+    pub name: String, //Interface name
+    pub v_net: Ipv4Net,
+    pub v_ip: Ipv4Addr,
+    pub status: InterfaceStatus,         //Interface status
+    pub neighbors: Vec<(Ipv4Addr, u16)>, //List of the interface's neighbors in (ipaddr, udpport) form
+    pub sender: Sender<InterCmd>, //Channel to send and receive messages from associated interface (sends InterCmd and receives Packet)
+}
+
+impl InterfaceRep {
+    pub fn new(
+        name: String,
+        v_net: Ipv4Net,
+        v_ip: Ipv4Addr,
+        neighbors: Vec<(Ipv4Addr, u16)>,
+        sender: Sender<InterCmd>,
+    ) -> InterfaceRep {
+        InterfaceRep {
+            name,
+            v_net,
+            v_ip,
+            status: InterfaceStatus::Up, //Status always starts as Up
+            neighbors,
+            sender,
+        }
+    }
+    pub fn command(&self, cmd: InterCmd) -> result::Result<(), SendError<InterCmd>> {
+        //Sends the input command to the interface
+        self.sender.send(cmd)
+    }
+}
+
+/* OLD INTERFACE REPS
 //Used to hold all the data that a node needs to know about a given interface
 #[derive(Debug)]
 pub struct InterfaceRep {
@@ -85,7 +120,7 @@ impl InterfaceRep {
         //Sends the input command to the interface
         self.chan.send.send(cmd)
     }
-}
+}*/
 
 //Used to indicate if an Interface is down or up
 #[derive(Debug)]

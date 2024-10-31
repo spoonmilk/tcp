@@ -101,8 +101,8 @@ pub trait VnodeBackend {
 
 pub trait VnodeIPDaemon {
     //Getters
-    fn interface_reps(&self) -> RwLockReadGuard<InterfaceTable>;
-    fn interface_reps_mut(&self) -> RwLockWriteGuard<InterfaceTable>;
+    fn interface_reps(&self) -> RwLockReadGuard<InterfaceTable>; //DON'T need to MUTATE InterfaceTable
+    fn interface_recvers(&self) -> &InterfaceRecvers;
     fn forwarding_table(&self) -> RwLockReadGuard<ForwardingTable>;
     fn forwarding_table_mut(&self) -> RwLockWriteGuard<ForwardingTable>;
     //fn rip_neighbors(&self) -> &RipNeighbors; - not needed because no rip functionality in here
@@ -114,9 +114,8 @@ pub trait VnodeIPDaemon {
         loop {
             let mut packets = Vec::new();
             let mut slf = slf_mutex.lock().unwrap();
-            for inter_rep in slf.interface_reps().values() {
-                let chan = &inter_rep.chan;
-                match chan.recv.try_recv() {
+            for inter_recv in slf.interface_recvers().values() {
+                match inter_recv.try_recv() {
                     Ok(pack) => packets.push(pack), //Can't call slf.forward_packet(pack) directly here for ownership reasons
                     Err(TryRecvError::Empty) => {}
                     Err(TryRecvError::Disconnected) => {
@@ -158,9 +157,9 @@ pub trait VnodeIPDaemon {
             };
             self.process_packet(pack);
         } else {
+            let inter_reps = self.interface_reps();
             let (inter_rep, next_hop) = match self.proper_interface(&ip_addr) {
-                Ok(Some((name, next_hop))) =>
-                    (self.interface_reps_mut().get_mut(&name.clone()).unwrap(), next_hop),
+                Ok(Some((name, next_hop))) => (inter_reps.get(&name).unwrap(), next_hop),
                 Ok(None) => {
                     panic!("No interface found for address: {}", addr);
                 }

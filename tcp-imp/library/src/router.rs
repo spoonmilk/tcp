@@ -7,18 +7,18 @@ use crate::vnode_traits::*;
 // Only pertain to things with next hops
 
 #[derive(Debug)]
-pub struct Router {
+pub struct RouterIPDaemon {
     interface_reps: Arc<RwLock<InterfaceTable>>, //Maps an interface's name to its associated InterfaceRep
+    interface_recvers: InterfaceRecvers,
     forwarding_table: Arc<RwLock<ForwardingTable>>,
     rip_neighbors: RipNeighbors, // Stores route information learned about from neighbors
 }
 
-impl VnodeIPDaemon for Router {
+impl VnodeIPDaemon for RouterIPDaemon {
     fn interface_reps(&self) ->  RwLockReadGuard<InterfaceTable> { self.interface_reps.read().unwrap() }
-    fn interface_reps_mut(&self) -> RwLockWriteGuard<InterfaceTable> { self.interface_reps.write().unwrap() }
+    fn interface_recvers(&self) -> &InterfaceRecvers { &self.interface_recvers }
     fn forwarding_table(&self) -> RwLockReadGuard<ForwardingTable> { self.forwarding_table.read().unwrap() }
     fn forwarding_table_mut(&self) -> RwLockWriteGuard<ForwardingTable> { self.forwarding_table.write().unwrap() }
-    fn rip_neighbors(&self) -> &RipNeighbors { &self.rip_neighbors }
     /// Take in a packet destined for the current node and display information from it
     fn process_packet(&mut self, pack: Packet) -> () {
         let src = Router::string_ip(pack.header.source);

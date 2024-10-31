@@ -15,6 +15,7 @@ RegisterRecvHandler(protocolNum uint8, callbackFunc HandlerFunc)
 
 mod prelude;
 mod utils; //pub for testing purposes - should change back on deployment
+mod new_utils;
 mod interface;
 mod vnode_traits;
 pub mod config;
