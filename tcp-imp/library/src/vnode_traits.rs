@@ -1,5 +1,6 @@
 use crate::prelude::*;
 use crate::utils::*;
+
 pub trait VnodeBackend {
     //Getters
     fn interface_reps(&self) -> RwLockReadGuard<InterfaceTable>;
@@ -108,27 +109,7 @@ pub trait VnodeIpDaemon {
     fn interface_recvers(&self) -> &InterfaceRecvers;
     fn forwarding_table(&self) -> RwLockReadGuard<ForwardingTable>;
     fn forwarding_table_mut(&self) -> RwLockWriteGuard<ForwardingTable>;
-    fn handler_table(&self) -> RwLockReadGuard<HandlerTable>;
-    fn handler_table_mut(&self) -> RwLockWriteGuard<HandlerTable>;
-    //Process packet - will be different across host and router
-    fn process_packet(&self, pack: Packet) -> () {
-        let protocol = pack.header.protocol;
-        if self.handler_table().get(&protocol).is_some() {
-            let handler = self.handler_table().get(&protocol).unwrap();
-            handler(&self, pack);
-        } else {
-            panic!("Unsupported protocol received");
-        }
-           
-    }
- 
-
-
-
-
-
-
-
+    fn process_packet(&self, pack: Packet) -> ();
     /// Listen for REPL commands to the node
     fn backend_listen<T: VnodeIpDaemon>(slf_mutex: Arc<Mutex<T>>, backend_recver: Receiver<PacketBasis>) -> () {
         loop {
@@ -325,8 +306,5 @@ pub trait VnodeIpDaemon {
             .map(|num| num.to_string())
             .collect::<Vec<String>>()
             .join(".")
-    }
-    fn register_recv_handler(&mut self, protocol: IpNumber, function: Handler) -> () {
-        self.handler_table_mut().insert(protocol, function);
     }
 }

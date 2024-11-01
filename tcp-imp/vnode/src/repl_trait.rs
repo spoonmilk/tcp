@@ -3,11 +3,12 @@ use std::result;
 //use library::backends::Backend;
 use library::vnode_traits::VnodeBackend;
 use library::utils::PacketBasis;
+use std::collections::HashMap;
 use std::sync::mpsc::Receiver;
 use std::thread;
 
-pub type Backend<T: VnodeBackend> = T;
-pub type CommandHandler = fn (backend: &Backend, args: Vec<String>) -> ();
+pub type Backend<T> = T;
+pub type CommandHandler = fn (backend: &Backend<dyn VnodeBackend>, args: Vec<String>) -> ();
 
 pub enum NumArgs {
     Exactly(usize),
@@ -23,23 +24,23 @@ pub type CommandTable = HashMap<String, CommandData>;
 
 pub trait VnodeRepl {
     //Getters
-    fn backend(&self) -> &Backend;
+    fn backend(&self) -> &Backend<dyn VnodeBackend>;
     fn command_table(&self) -> &CommandTable;
     fn command_table_mut(&self) -> &mut CommandTable;
     //Functions that differ between repls
     fn get_all_commands(&self) -> Vec<(String, CommandData)>;
     //Methods
-    pub fn run(ip_recver: Receiver<String>) -> () {
+    pub fn run(&self, ip_recver: Receiver<String>) -> () {
         let command_table = self.command_table_mut();
-        self.get_all_commands().iter().for_each(|(name, cd)| command_table.insert(name, cd));
-        thread::spawn(move || ip_listen(ip_recver));
+        self.get_all_commands().iter().for_each(|(name, cd)| command_table.insert(name.clone(), cd));
+        thread::spawn(move || self.ip_listen(ip_recver));
         self.run_repl();
     }
     fn add_command(&mut self, name: String, num_args: NumArgs, handler: CommandHandler) -> () {
         let cd = CommandData { handler, num_args };
         self.command_table_mut().insert(name, cd);
     }
-    fn ip_listen(ip_recver: Receiver<String>) -> () {
+    fn ip_listen(&self, ip_recver: Receiver<String>) -> () {
         loop {
             match ip_recver.recv() {
                 Ok(msg) => println!("{msg:?}"),
@@ -53,7 +54,7 @@ pub trait VnodeRepl {
             let cmd = ed.readline("> ");
             match cmd {
                 Ok(cmd) => {
-                    if let Err(e) = execute_command(cmd, &nd_rep) { println!("{e:?}"); }
+                    if let Err(e) = self.execute_command(cmd) { println!("{e:?}"); }
                 }
                 Err(ReadlineError::Interrupted) => break println!("Exiting"),
                 Err(e) => eprintln!("{e:?}"),

@@ -9,5 +9,4 @@ pub use std::sync::{Mutex, mpsc::{channel, Sender, Receiver, TryRecvError, SendE
 pub use etherparse::{Ipv4Header, IpNumber};
 pub use lnxparser::{IPConfig, InterfaceConfig, NeighborConfig, RoutingType, StaticRoute};
 pub use ipnet::Ipv4Net;
-//pub use prettyprint::PrettyPrint;
 pub use std::time::{Instant, Duration};

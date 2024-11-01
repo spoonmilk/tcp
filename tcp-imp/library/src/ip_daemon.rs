@@ -2,6 +2,9 @@ use crate::prelude::*;
 use crate::rip_utils::*;
 use crate::utils::*;
 
+type HandlerTable = HashMap<IpNumber, Handler>;
+type Handler = fn(&IPDaemon, Packet) -> Result<()>;
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum IPDaemonType {
     Router,
@@ -13,7 +16,9 @@ pub struct IPDaemon {
     pub n_type: IPDaemonType,
     interface_reps: InterfaceTable, //Maps an interface's name to its associated InterfaceRep
     forwarding_table: ForwardingTable,
-    rip_neighbors: HashMap<Ipv4Addr, Vec<Route>>, // Stores route information learned about from neighbors
+    handler_table: HandlerTable,
+    rip_neighbors: RipNeighbors, // Stores route information learned about from neighbors
+    // socket_table: SocketTable
 }
 
 impl IPDaemon {
@@ -21,12 +26,13 @@ impl IPDaemon {
         n_type: IPDaemonType,
         interface_reps: InterfaceTable,
         forwarding_table: ForwardingTable,
-        rip_neighbors: HashMap<Ipv4Addr, Vec<Route>>
+        rip_neighbors: RipNeighbors
     ) -> IPDaemon {
         IPDaemon {
             n_type,
             interface_reps,
             forwarding_table,
+            handler_table: HashMap::new(),
             rip_neighbors,
         }
     }
