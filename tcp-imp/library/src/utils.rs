@@ -1,9 +1,12 @@
-use crate::prelude::*;
+use crate::{prelude::*, vnode_traits::VnodeBackend};
+
+pub type Handler = fn(&dyn VnodeBackend, Packet) -> ();
 
 pub type ForwardingTable = HashMap<Ipv4Net, Route>;
 pub type InterfaceTable = HashMap<String, InterfaceRep>; //Is shared via Arc<RwLock<>>
 pub type InterfaceRecvers = HashMap<String, Receiver<Packet>>; //NEVER shared - only IPDaemon has this
 pub type RipNeighbors = HashMap<Ipv4Addr, Vec<Route>>; 
+pub type HandlerTable = HashMap<IpNumber, Handler>;
 //type SocketTable = ...?
 
 //Used as values of the forwarding table hashmap held by nodes

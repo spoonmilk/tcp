@@ -8,9 +8,6 @@ pub enum IPDaemonType {
     Host,
 }
 
-// Add creation time to table, subtract from current time, if greater than 12 secs refresh
-// Only pertain to things with next hops
-
 #[derive(Debug)]
 pub struct IPDaemon {
     pub n_type: IPDaemonType,
