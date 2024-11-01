@@ -50,7 +50,6 @@ pub trait RipDaemon: VnodeIpDaemon {
     ///Sends a RIP response to a given destination IP containing routes correlating to the input option of 
     ///a vector of Ipv4Nets - if None, send all routes
     fn rip_respond(&self, dst: Ipv4Addr, nets: Option<&Vec<Ipv4Net>>) -> () {
-        // println!("Sending RIP response to neighbor {}", dst);
         let rip_resp_msg: RipMsg = self.table_to_rip(nets);
         let pack = self.package_rmsg(rip_resp_msg, dst);
         self.send(pack);

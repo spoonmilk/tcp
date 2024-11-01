@@ -125,15 +125,6 @@ pub struct PacketBasis {
     pub msg: Vec<u8>,
 }
 
-pub enum CmdType {
-    Li,
-    Ln,
-    Lr,
-    Up(String),
-    Down(String),
-    Send(String, String),
-}
-
 // TODO: GET HANDY WITH HANDLERS
 // type Handler(&Node, Packet) -> ()
 // HandlerTable: HashMap<IpNumber, Handler>

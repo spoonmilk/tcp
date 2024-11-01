@@ -17,6 +17,7 @@ mod prelude;
 pub mod utils; //pub for testing purposes - should change back on deployment
 mod interface;
 mod rip_trait;
+mod tcp_utils;
 pub mod vnode_traits;
 pub mod config;
 pub mod backends;

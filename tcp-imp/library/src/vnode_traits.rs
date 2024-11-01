@@ -165,7 +165,7 @@ pub trait VnodeIpDaemon {
     fn build(&self, pb: PacketBasis) -> Packet {
         // Match proper interface to find src ip
         let src_ip = match self.proper_interface(&pb.dst_ip) {
-            Ok(Some((_, addr))) => addr,
+            Ok(Some((inter, _))) => self.interface_reps().get(&inter).unwrap().v_net.addr(),
             _ => {
                 panic!("Failed to build packet ; fuck")
             }
@@ -203,7 +203,7 @@ pub trait VnodeIpDaemon {
                 );
             }
         };
-        println!("Sending test packet to next hop: {}", next_hop);
+        //println!("Sending test packet to next hop: {}", next_hop);
         inter_rep
             .command(InterCmd::Send(pack, next_hop))
             .expect("Error sending connecting to interface or sending packet");

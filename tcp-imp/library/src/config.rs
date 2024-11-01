@@ -71,7 +71,10 @@ pub fn initialize(config_info: IPConfig) -> Result<(Backend, Receiver<String>)> 
             let backend = RouterBackend::new(backend_interface_reps, backend_forwarding_table, backend_bichan.send);
             //Create RIP neighbors table
             let mut rip_table = HashMap::new();
-            let rip_neighbors = config_info.rip_neighbors.expect("Node of type Router but with no rip neighbors");
+            let rip_neighbors = match config_info.rip_neighbors {
+                Some(rip_neighbors) => rip_neighbors,
+                None => Vec::new() //Empty rip neighbors list
+            };
             add_rip_neighbors(&mut rip_table, rip_neighbors);
             //Construct and run ipdaemon
             let ipdaemon = RouterIpDaemon::new(ipdaemon_interface_reps, interface_recvers, ipdaemon_forwarding_table, rip_table, ipdaemon_bichan.send);
