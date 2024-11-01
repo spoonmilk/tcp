@@ -32,9 +32,7 @@ impl HostBackend {
 pub struct RouterBackend {
     interface_reps: Arc<RwLock<InterfaceTable>>,
     forwarding_table: Arc<RwLock<ForwardingTable>>,
-    rip_table: Arc<RwLock<RipNeighbors>>,
     ip_sender: Sender<PacketBasis>,
-    
     //NO SOCKET TABLE NEEDED
 }
 
@@ -46,7 +44,7 @@ impl VnodeBackend for RouterBackend {
 }
 
 impl RouterBackend {
-    pub fn new(interface_reps: Arc<RwLock<InterfaceTable>>, forwarding_table: Arc<RwLock<ForwardingTable>>, rip_table: Arc<RwLock<RipNeighbors>>, ip_sender: Sender<PacketBasis>) -> RouterBackend {
-        RouterBackend { interface_reps, forwarding_table, rip_table, ip_sender }
+    pub fn new(interface_reps: Arc<RwLock<InterfaceTable>>, forwarding_table: Arc<RwLock<ForwardingTable>>, ip_sender: Sender<PacketBasis>) -> RouterBackend {
+        RouterBackend { interface_reps, forwarding_table, ip_sender }
     }
 }

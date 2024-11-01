@@ -1,5 +1,5 @@
 use crate::interface::*;
-// use crate::ip_daemon::*;
+use crate::ip_daemons::{RouterIpDaemon, HostIpDaemon};
 use crate::prelude::*;
 use crate::utils::*;
 use crate::backends::{ HostBackend, RouterBackend, Backend };
@@ -7,10 +7,11 @@ use crate::backends::{ HostBackend, RouterBackend, Backend };
 fn init_interfaces(
     interfaces: Vec<InterfaceConfig>,
     neighbors: Vec<NeighborConfig>
-) -> InterfaceTable {
+) -> (InterfaceTable, InterfaceRecvers) {
     let mut interface_reps = HashMap::new();
+    let mut interface_recvers = HashMap::new();
     for inter_conf in interfaces {
-        let (inter_chan, inter_rep_chan) = make_bichans();
+        let (inter_chan, inter_rep_chan) = BiChan::make_bichans();
         // Fill neighbor HashMap AND the InterfaceRep's neighbor vector from NeighborConfig
         let mut inter_neighbors: HashMap<Ipv4Addr, u16> = HashMap::new();
         let mut inter_rep_neighbors: Vec<(Ipv4Addr, u16)> = Vec::new();
@@ -32,77 +33,60 @@ fn init_interfaces(
         interface_reps.insert(
             inter_conf.name.clone(),
             InterfaceRep::new(
-                inter_conf.name,
+                inter_conf.name.clone(),
                 inter_conf.assigned_prefix, //.trunc(),
                 inter_conf.assigned_ip,
                 inter_rep_neighbors,
                 inter_rep_chan.send
             )
         );
+        interface_recvers.insert(
+            inter_conf.name,
+            inter_rep_chan.recv
+        );
     }
-    interface_reps
-}
-
-///Creates a pair of connected BiChans for corresponding interfaces and interfaceReps
-fn make_bichans() -> (BiChan<Packet, InterCmd>, BiChan<InterCmd, Packet>) {
-    let chan1 = channel::<Packet>();
-    let chan2 = channel::<InterCmd>();
-    let inter_chan = BiChan {
-        send: chan1.0,
-        recv: chan2.1,
-    };
-    let inter_rep_chan = BiChan {
-        send: chan2.0,
-        recv: chan1.1,
-    };
-    (inter_chan, inter_rep_chan)
+    (interface_reps, interface_recvers)
 }
 
 // Handles initializing routers, returns to initialize
 pub fn initialize(config_info: IPConfig) -> Result<(Backend, Receiver<String>)> {
     // Create hashmap of interfaceReps (keys are names of interfaceReps)
-    let interface_reps = init_interfaces(config_info.interfaces, config_info.neighbors);
-    //Create forwarding table
+    let (interface_reps, interface_recvers) = init_interfaces(config_info.interfaces, config_info.neighbors);
+    //Create and configure forwarding table
     let mut forwarding_table = HashMap::new();
     add_static_routes(&mut forwarding_table, config_info.static_routes);
     add_local_routes(&mut forwarding_table, &interface_reps);
     add_toself_routes(&mut forwarding_table, &interface_reps);
-
-    // Create RIP neighbors table
-    let mut rip_table: HashMap<Ipv4Addr, Vec<Route>> = HashMap::new();
-    match config_info.rip_neighbors {
-        Some(rip_neighbors) => add_rip_neighbors(&mut rip_table, rip_neighbors),
-        None => (),
-    }
+    //Protect shared state
+    let backend_interface_reps = Arc::new(RwLock::new(interface_reps));
+    let ipdaemon_interface_reps = Arc::clone(&backend_interface_reps);
+    let backend_forwarding_table = Arc::new(RwLock::new(forwarding_table));
+    let ipdaemon_forwarding_table = Arc::clone(&backend_forwarding_table);
+    //Make bichan for between Ipdaemon and Backend
+    let (backend_bichan, ipdaemon_bichan) = BiChan::<PacketBasis, String>::make_bichans();
+    let ip_recver = backend_bichan.recv;
     match config_info.routing_mode {
         RoutingType::Rip => {
-            // let handler_table = HashMap::new();
-            let ip_sender = channel::<PacketBasis>().0; // Create a new sender channel
-            Ok((
-                Backend::Router(
-                    RouterBackend::new(
-                        Arc::new(RwLock::new(interface_reps)), // Wrap interface_reps in Arc and RwLock
-                        Arc::new(RwLock::new(forwarding_table)), // Wrap forwarding_table in Arc and RwLock
-                        Arc::new(RwLock::new(rip_table)), // Wrap rip_table in Arc and RwLock
-                        ip_sender // Pass ip_sender as the third argument
-                    )
-                ),
-                channel::<String>().1,
-            ))
+            //Make router backend
+            let backend = RouterBackend::new(backend_interface_reps, backend_forwarding_table, backend_bichan.send);
+            //Create RIP neighbors table
+            let mut rip_table = HashMap::new();
+            let rip_neighbors = config_info.rip_neighbors.expect("Node of type Router but with no rip neighbors");
+            add_rip_neighbors(&mut rip_table, rip_neighbors);
+            //Construct and run ipdaemon
+            let ipdaemon = RouterIpDaemon::new(ipdaemon_interface_reps, interface_recvers, ipdaemon_forwarding_table, rip_table, ipdaemon_bichan.send);
+            thread::spawn(move || ipdaemon.run(ipdaemon_bichan.recv));
+            //Return backend and its receiver
+            Ok((Backend::Router(backend), ip_recver))
         }
         RoutingType::Static => {
-            // let handler_table = HashMap::new();
-            let ip_sender = channel::<PacketBasis>().0; // Create a new sender channel
-            Ok((
-                Backend::Host(
-                    HostBackend::new(
-                        Arc::new(RwLock::new(interface_reps)), // Wrap interface_reps in Arc and RwLock
-                        Arc::new(RwLock::new(forwarding_table)), // Wrap forwarding_table in Arc and RwLock
-                        ip_sender // Pass ip_sender as the third argument
-                    )
-                ),
-                channel::<String>().1,
-            ))
+            //Make router backend
+            let backend = HostBackend::new(backend_interface_reps, backend_forwarding_table, backend_bichan.send);
+            //Construct and run ipdaemon
+            let ipdaemon = HostIpDaemon::new(ipdaemon_interface_reps, interface_recvers, ipdaemon_forwarding_table, ipdaemon_bichan.send);
+            thread::spawn(move || ipdaemon.run(ipdaemon_bichan.recv));
+            //Return backend and its receiver
+            Ok((Backend::Host(backend), ip_recver))
         }
         RoutingType::None => panic!("Should never encounter config with router type none."),
     }

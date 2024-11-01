@@ -1,56 +1,53 @@
+use std::collections::HashMap;
 use crate::repl_trait::*;
-
-const BASE_COMMANDS: Vec<(String, CommandData)> = vec![
-    "li", CommandData { handler: |_args: Vec<String>| self.backend.li(), num_args: NumArgs::Exactly(0) }, 
-    "ln", CommandData { handler: |_args: Vec<String>| self.backend.ln(), num_args: NumArgs::Exactly(0) }, 
-    "lr", CommandData { handler: |_args: Vec<String>| self.backend.lr(), num_args: NumArgs::Exactly(0) },
-    "up", CommandData { handler: |args: Vec<String>| self.backend.up(args.remove(0)), num_args: NumArgs::Exactly(1) },
-    "down", CommandData { handler: |args: Vec<String>| self.backend.down(args.remove(0)), num_args: NumArgs::Exactly(1) },
-    "send", CommandData { handler: |args: Vec<String>| {
-        let parsed = <HostRepl as VnodeRepl>::parse_send(&mut args);
-        let dst_ip = match Ipv4Addr::try_from(parsed.0) {
-            Ok(ip_addr) => ip_addr,
-            Err(_) => return Err("Input IP address is not a valid IP address")
-        };
-        let pb = PacketBasis { dst_ip, prot_num: 0, msg: parsed.1 };
-        backend.raw_send(pb)
-    }, num_args: NumArgs::Any },
-];
+use library::backends::{HostBackend, RouterBackend};
+use std::thread;
+use std::sync::mpsc::Receiver;
 
 pub struct HostRepl {
-    pub backend: Backend,
+    pub backend: HostBackend,
     command_table: CommandTable
 }
 
-impl VnodeRepl for HostRepl {
-    fn backend(&self) -> &Backend { &self.backend }
+impl VnodeRepl<HostBackend> for HostRepl {
+    fn backend(&self) -> &HostBackend { &self.backend }
     fn command_table(&self) -> &CommandTable { &self.command_table }
-    fn command_table_mut(&self) -> &mut CommandTable { &mut self.command_table }
+    fn command_table_mut(&mut self) -> &mut CommandTable { &mut self.command_table }
     fn get_all_commands(&self) -> Vec<(String, CommandData)> {
-        BASE_COMMANDS.clone() // + other commands - COMING SOON
+        self.get_base_commands() // + other commands - COMING SOON
     }
 }
 
 impl HostRepl {
-    pub fn new(backend: Backend) {
+    pub fn new(backend: HostBackend) -> HostRepl {
         HostRepl { backend, command_table: HashMap::new() }
+    }
+    pub fn run(mut self, ip_recver: Receiver<String>) -> () { //Can't be put in trait because of weird size issue
+        self.init_command_table();
+        thread::spawn(move || Self::ip_listen(ip_recver));
+        self.run_repl();
     }
 }
 
 pub struct RouterRepl {
-    pub backend: Backend,
+    pub backend: RouterBackend,
     command_table: CommandTable
 }
 
-impl VnodeRepl for RouterRepl {
-    fn backend(&self) -> &Backend { &self.backend }
+impl VnodeRepl<RouterBackend> for RouterRepl {
+    fn backend(&self) -> &RouterBackend { &self.backend }
     fn command_table(&self) -> &CommandTable { &self.command_table }
-    fn command_table_mut(&self) -> &mut CommandTable { &mut self.command_table }
-    fn get_all_commands(&self) -> Vec<(String, CommandData)> { BASE_COMMANDS.clone() }
+    fn command_table_mut(&mut self) -> &mut CommandTable { &mut self.command_table }
+    fn get_all_commands(&self) -> Vec<(String, CommandData)> { self.get_base_commands() }
 }
 
 impl RouterRepl {
-    pub fn new(backend: Backend) {
+    pub fn new(backend: RouterBackend) -> RouterRepl {
         RouterRepl { backend, command_table: HashMap::new() }
+    }
+    pub fn run(mut self, ip_recver: Receiver<String>) -> () {
+        self.init_command_table();
+        thread::spawn(move || Self::ip_listen(ip_recver));
+        self.run_repl();
     }
 }

@@ -54,6 +54,22 @@ pub struct BiChan<T, U> {
     pub recv: Receiver<U>,
 }
 
+impl<T, U> BiChan<T, U> {
+    pub fn make_bichans() -> (BiChan<T, U>, BiChan<U, T>) {
+        let chan1 = channel::<T>();
+        let chan2 = channel::<U>();
+        let inter_chan = BiChan {
+            send: chan1.0,
+            recv: chan2.1,
+        };
+        let inter_rep_chan = BiChan {
+            send: chan2.0,
+            recv: chan1.1,
+        };
+        (inter_chan, inter_rep_chan)
+    }
+}
+
 #[derive(Debug)]
 pub struct InterfaceRep {
     pub name: String, //Interface name
@@ -86,41 +102,6 @@ impl InterfaceRep {
         self.sender.send(cmd)
     }
 }
-
-/* OLD INTERFACE REPS
-//Used to hold all the data that a node needs to know about a given interface
-#[derive(Debug)]
-pub struct InterfaceRep {
-    pub name: String, //Interface name
-    pub v_net: Ipv4Net,
-    pub v_ip: Ipv4Addr,
-    pub status: InterfaceStatus,         //Interface status
-    pub neighbors: Vec<(Ipv4Addr, u16)>, //List of the interface's neighbors in (ipaddr, udpport) form
-    pub chan: BiChan<InterCmd, Packet>, //Channel to send and receive messages from associated interface (sends InterCmd and receives Packet)
-}
-
-impl InterfaceRep {
-    pub fn new(
-        name: String,
-        v_net: Ipv4Net,
-        v_ip: Ipv4Addr,
-        neighbors: Vec<(Ipv4Addr, u16)>,
-        chan: BiChan<InterCmd, Packet>,
-    ) -> InterfaceRep {
-        InterfaceRep {
-            name,
-            v_net,
-            v_ip,
-            status: InterfaceStatus::Up, //Status always starts as Up
-            neighbors,
-            chan,
-        }
-    }
-    pub fn command(&self, cmd: InterCmd) -> result::Result<(), SendError<InterCmd>> {
-        //Sends the input command to the interface
-        self.chan.send.send(cmd)
-    }
-}*/
 
 //Used to indicate if an Interface is down or up
 #[derive(Debug)]

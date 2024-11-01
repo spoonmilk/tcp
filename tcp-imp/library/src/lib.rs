@@ -20,8 +20,10 @@ mod rip_trait;
 pub mod vnode_traits;
 pub mod config;
 pub mod backends;
-pub mod router;
-pub mod host;
+// pub mod router;
+// pub mod host;
+pub mod ip_daemons;
+pub mod sockets;
 
 // pub mod ip_daemon;
 pub mod rip_utils;

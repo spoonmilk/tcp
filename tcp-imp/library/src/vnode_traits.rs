@@ -29,7 +29,10 @@ pub trait VnodeBackend {
         println!("Iface\tVIP\t\tUDPAddr");
         for inter_rep in self.interface_reps().values() {
             for neighbor in &inter_rep.neighbors {
-                println!("{}\t{}\t127.0.0.1:{}", inter_rep.name, neighbor.0, neighbor.1);
+                println!(
+                    "{}\t{}\t127.0.0.1:{}",
+                    inter_rep.name, neighbor.0, neighbor.1
+                );
             }
         }
     }
@@ -56,11 +59,18 @@ pub trait VnodeBackend {
                     continue;
                 } //Should never get here
             };
-            println!("{}\t{}/{}\t{}\t{}", r_type, v_net.addr(), v_net.prefix_len(), next_hop, cost);
+            println!(
+                "{}\t{}/{}\t{}\t{}",
+                r_type,
+                v_net.addr(),
+                v_net.prefix_len(),
+                next_hop,
+                cost
+            );
         }
     }
     /// Enable an interface
-    fn up(&mut self, inter: String) -> () {
+    fn up(&self, inter: String) -> () {
         match self.interface_reps_mut().get_mut(&inter) {
             Some(inter_rep) => {
                 match inter_rep.status {
@@ -79,7 +89,7 @@ pub trait VnodeBackend {
         }
     }
     /// Disable an interface
-    fn down(&mut self, inter: String) -> () {
+    fn down(&self, inter: String) -> () {
         match self.interface_reps_mut().get_mut(&inter) {
             Some(inter_rep) => {
                 match inter_rep.status {
@@ -98,9 +108,10 @@ pub trait VnodeBackend {
         }
     }
     fn raw_send(&self, pb: PacketBasis) -> () {
-        if let Err(e) = self.ip_sender().send(pb) { panic!("{e:?}") }
+        if let Err(e) = self.ip_sender().send(pb) {
+            panic!("{e:?}")
+        }
     }
-    
 }
 
 pub trait VnodeIpDaemon {
@@ -109,9 +120,12 @@ pub trait VnodeIpDaemon {
     fn interface_recvers(&self) -> &InterfaceRecvers;
     fn forwarding_table(&self) -> RwLockReadGuard<ForwardingTable>;
     fn forwarding_table_mut(&self) -> RwLockWriteGuard<ForwardingTable>;
-    fn process_packet(&self, pack: Packet) -> ();
+    fn backend_sender(&self) -> &Sender<String>;
     /// Listen for REPL commands to the node
-    fn backend_listen<T: VnodeIpDaemon>(slf_mutex: Arc<Mutex<T>>, backend_recver: Receiver<PacketBasis>) -> () {
+    fn backend_listen<T: VnodeIpDaemon>(
+        slf_mutex: Arc<Mutex<T>>,
+        backend_recver: Receiver<PacketBasis>,
+    ) -> () {
         loop {
             match backend_recver.recv() {
                 Ok(pb) => {
@@ -119,7 +133,7 @@ pub trait VnodeIpDaemon {
                     let pack = slf.build(pb);
                     slf.send(pack);
                 }
-                Err(e) => panic!("Error receiving from backend: {e:?}")
+                Err(e) => panic!("Error receiving from backend: {e:?}"),
             }
         }
     }
@@ -151,8 +165,10 @@ pub trait VnodeIpDaemon {
     fn build(&self, pb: PacketBasis) -> Packet {
         // Match proper interface to find src ip
         let src_ip = match self.proper_interface(&pb.dst_ip) {
-            Ok(Some((_, addr))) => { addr },
-            _ => { panic!("Failed to build packet ; fuck") }
+            Ok(Some((_, addr))) => addr,
+            _ => {
+                panic!("Failed to build packet ; fuck")
+            }
         };
         // TODO: UPDATE FOR NON RIP/TEST PACKAGES
         let mut header = Ipv4Header {
@@ -176,12 +192,15 @@ pub trait VnodeIpDaemon {
         let dst_ip = Ipv4Addr::from(pack.header.destination.clone());
         let (inter_rep, next_hop) = match self.proper_interface(&dst_ip) {
             Ok(Some((name, next_hop))) => (inter_reps.get(&name).unwrap(), next_hop),
-            Ok(None) => { // Sent to self, process
+            Ok(None) => {
+                // Sent to self, process
                 return self.process_packet(pack);
             }
             Err(e) => {
                 // Panicking shouldn't happen on IP level, just drop the packet
-                return eprintln!("Couldn't find a proper interface for packet, dropping. Error: {e:?}"); 
+                return eprintln!(
+                    "Couldn't find a proper interface for packet, dropping. Error: {e:?}"
+                );
             }
         };
         println!("Sending test packet to next hop: {}", next_hop);
@@ -200,15 +219,14 @@ pub trait VnodeIpDaemon {
         let pack = <Self as VnodeIpDaemon>::update_pack(pack);
         let pack_header = pack.clone().header;
         //Get the proper interface's name
-        let (inter_rep_name, next_hop) = match
-            self.proper_interface(&Ipv4Addr::from(pack_header.destination))?
-        {
-            Some((name, next_hop)) => (name, next_hop),
-            None => {
-                self.process_packet(pack);
-                return Ok(());
-            }
-        };
+        let (inter_rep_name, next_hop) =
+            match self.proper_interface(&Ipv4Addr::from(pack_header.destination))? {
+                Some((name, next_hop)) => (name, next_hop),
+                None => {
+                    self.process_packet(pack);
+                    return Ok(());
+                }
+            };
         //Find the proper interface and hand the packet off to it
         let inter_rep_name = inter_rep_name.clone(); //Why? To get around stinkin Rust borrow checker. Get rid of this line (and the borrow on the next) to see why. Ugh
         let binding = self.interface_reps();
@@ -228,7 +246,10 @@ pub trait VnodeIpDaemon {
         loop {
             //Loop until bottom out at a route that sends to an interface
             //Run it through longest prefix
-            let netmask = <Self as VnodeIpDaemon>::longest_prefix(self.forwarding_table().keys().collect(), dst_ip)?;
+            let netmask = <Self as VnodeIpDaemon>::longest_prefix(
+                self.forwarding_table().keys().collect(),
+                dst_ip,
+            )?;
             let route = table_lock.get(&netmask).unwrap();
             //If it's an Ip address, repeat with that IP address, an interface, forward via channel to that interface, if it is a ToSelf, handle internally
             dst_ip = match &route.next_hop {
@@ -279,7 +300,10 @@ pub trait VnodeIpDaemon {
     /// Longest prefix matching for packet forwarding
     fn longest_prefix(prefixes: Vec<&Ipv4Net>, addr: &Ipv4Addr) -> Result<Ipv4Net> {
         if prefixes.len() < 1 {
-            return Err(Error::new(ErrorKind::Other, "No prefixes to search through"));
+            return Err(Error::new(
+                ErrorKind::Other,
+                "No prefixes to search through",
+            ));
         }
         let mut current_longest: Option<Ipv4Net> = None;
         for prefix in prefixes {
@@ -307,4 +331,33 @@ pub trait VnodeIpDaemon {
             .collect::<Vec<String>>()
             .join(".")
     }
+    fn process_test_packet(&self, pack: Packet) -> () {
+        let src = <Self as VnodeIpDaemon>::string_ip(pack.header.source);
+        let dst = <Self as VnodeIpDaemon>::string_ip(pack.header.destination);
+        let ttl = pack.header.time_to_live;
+        // Message received is a test packet
+        let msg = String::from_utf8(pack.data).unwrap();
+        let retstr = format!(
+            "Received tst packet: Src: {}, Dst: {}, TTL: {}, {}",
+            src, dst, ttl, msg
+        );
+        self.backend_sender()
+            .send(retstr)
+            .expect("Could not send to backend"); 
+    }
+    fn process_packet(&self, pack: Packet) -> () {
+        self.shared_protocols(pack.header.protocol, pack);
+    }
+    fn shared_protocols(&self, protocol: IpNumber, pack: Packet) -> () {
+        match protocol {
+            etherparse::IpNumber(0) => {
+                self.process_test_packet(pack);
+            }
+            _ => {
+                self.local_protocols(protocol, pack);
+            }
+        }
+    }
+    /// Individually expressed processing functions for routers, hosts
+    fn local_protocols(&self, _protocol: IpNumber, _pack: Packet) -> () {}
 }
