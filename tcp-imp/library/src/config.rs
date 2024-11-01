@@ -2,6 +2,7 @@ use crate::interface::*;
 use crate::ip_daemon::*;
 use crate::prelude::*;
 use crate::utils::*;
+use crate::backends::{HostBackend, RouterBackend, Backend};
 
 fn init_interfaces(
     interfaces: Vec<InterfaceConfig>,
@@ -59,7 +60,7 @@ fn make_bichans() -> (BiChan<Packet, InterCmd>, BiChan<InterCmd, Packet>) {
 }
 
 // Handles initializing routers, returns to initialize
-pub fn initialize(config_info: IPConfig) -> Result<IPDaemon> {
+pub fn initialize(config_info: IPConfig) -> Result<(Backend, Receiver<String>)> {
     // Create hashmap of interfaceReps (keys are names of interfaceReps)
     let interface_reps = init_interfaces(config_info.interfaces, config_info.neighbors);
     //Find IPDaemon type

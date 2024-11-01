@@ -1,10 +1,12 @@
+mod repl_trait;
+mod repls;
+
 use std::env;
 use std::thread::spawn;
 use std::sync::mpsc::channel;
 use lnxparser::IPConfig;
 use library::config::initialize;
-mod router_repl;
-//use library::ip_data_types::{IPDaemon, IPDaemonType};
+use library::backends::Backend;
 
 fn main() {
     // Get command line args upon boot
@@ -16,14 +18,16 @@ fn main() {
     let file_path = (&args[2]).clone();
     //Initialize the IPDaemon
     let config_info: IPConfig = IPConfig::new(file_path);
-    let nd = match initialize(config_info) {
-        Ok(nd) => nd,
-        Err(e) => panic!("Error initializing IPDaemon: {e:?}")
-    };
-    //Create a channel and run the IPDaemon
-    let nd_type = nd.n_type.clone();
-    let (send, recv) = channel();
-    spawn(move || nd.run(recv));
+    let (backend, ip_recver) = initialize(config_info).expect("Error initializing backend");
     //Run REPL
-    let _ = router_repl::run_repl(nd_type, send);
+    match backend {
+        Backend::Host(hbackend) => {
+            let repl = repls::HostRepl::new(hbackend);
+            repl.run(ip_recver);
+        }
+        Backend::Router(rbackend) => {
+            let repl = repls::RouterRepl::new(rbackend);
+            repl.run(ip_recver);
+        }
+    }
 }

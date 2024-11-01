@@ -21,6 +21,6 @@ mod rip_trait;
 mod vnode_traits;
 pub mod config;
 pub mod backends;
-pub mod router;
+pub mod ip_daemons;
 pub mod ip_daemon;
 pub mod rip_utils;
