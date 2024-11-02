@@ -83,7 +83,17 @@ pub fn initialize(config_info: IPConfig) -> Result<(Backend, Receiver<String>)> 
             Ok((Backend::Router(backend), ip_recver))
         }
         RoutingType::Static => {
-            //Make router backend
+            // TODO: Add creating a socket manager here
+            // // Get local host ip
+            // let local_ip = match interface_reps.get("if0") {
+            //     Some(inter_rep) => inter_rep.v_ip,
+            //     None => panic!("Could not initialize host, no local interface found.")
+            // };
+
+
+
+
+            //Make host backend
             let backend = HostBackend::new(backend_interface_reps, backend_forwarding_table, backend_bichan.send);
             //Construct and run ipdaemon
             let ipdaemon = HostIpDaemon::new(ipdaemon_interface_reps, interface_recvers, ipdaemon_forwarding_table, ipdaemon_bichan.send);

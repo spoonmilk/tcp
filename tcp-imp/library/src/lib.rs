@@ -14,17 +14,14 @@ RegisterRecvHandler(protocolNum uint8, callbackFunc HandlerFunc)
 */
 
 mod prelude;
-pub mod utils; //pub for testing purposes - should change back on deployment
 mod interface;
+pub mod utils; //pub for testing purposes - should change back on deployment
 mod rip_trait;
 mod tcp_utils;
+mod conn_socket;
 pub mod vnode_traits;
 pub mod config;
 pub mod backends;
-// pub mod router;
-// pub mod host;
 pub mod ip_daemons;
-pub mod sockets;
-
-// pub mod ip_daemon;
+pub mod socket_manager;
 pub mod rip_utils;

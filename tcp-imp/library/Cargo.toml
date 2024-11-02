@@ -7,4 +7,5 @@ edition = "2021"
 lnxparser = { path = "../lnxparser" }
 etherparse = "0.16"
 ipnet = "2.10.1"
+rand = "0.8.5"
 
