@@ -8,7 +8,8 @@ use std::sync::mpsc::Receiver;
 use std::net::Ipv4Addr;
 
 //pub type CommandHandler = Box<dyn FnMut(Vec<String>) -> ()>;
-pub type CommandHandler = for<'a> fn(&'a dyn VnodeBackend, Vec<String>) -> ();
+//pub type CommandHandler = for<'a> fn(&'a dyn VnodeBackend, Vec<String>) -> ();
+pub type CommandHandler = Box<dyn for<'a> Fn(&'a dyn VnodeBackend, Vec<String>)>;
 
 pub enum NumArgs {
     Exactly(usize),
@@ -22,13 +23,14 @@ pub struct CommandData {
 
 pub type CommandTable = HashMap<String, CommandData>;
 
-pub trait VnodeRepl<Backend: VnodeBackend> {
+pub trait VnodeRepl<Backend: VnodeBackend + 'static> where Self: 'static {
     //Getters
     fn backend(&self) -> &Backend;
     fn command_table(&self) -> &CommandTable;
     fn command_table_mut(&mut self) -> &mut CommandTable;
     //Functions that differ between repls
     fn get_all_commands(&self) -> Vec<(String, CommandData)>;
+    //fn ip_listen(ip_recver: Receiver<Packet>) -> ();
     //Methods
     fn init_command_table(&mut self) -> () {
         let mut commands = self.get_all_commands();
@@ -40,14 +42,6 @@ pub trait VnodeRepl<Backend: VnodeBackend> {
         let cd = CommandData { handler, num_args };
         self.command_table_mut().insert(name, cd);
     }*/
-    fn ip_listen(ip_recver: Receiver<String>) -> () {
-        loop {
-            match ip_recver.recv() {
-                Ok(msg) => println!("{msg:?}"),
-                Err(e) => panic!("Error receiving from ip channel: {e:?}")
-            }
-        }
-    }
     fn run_repl(&self) -> () {
         let mut ed = Editor::<(), DefaultHistory>::new().unwrap();
         loop {
@@ -103,31 +97,16 @@ pub trait VnodeRepl<Backend: VnodeBackend> {
     }
     fn get_base_commands(&self) -> Vec<(String, CommandData)> {
         let mut base_commands = vec![
-            ("li", CommandData { handler: Self::li_handler, num_args: NumArgs::Exactly(0) }), 
-            ("ln", CommandData { handler: Self::ln_handler, num_args: NumArgs::Exactly(0) }), 
-            ("lr", CommandData { handler: Self::lr_handler, num_args: NumArgs::Exactly(0) }),
-            ("up", CommandData { handler: Self::up_handler, num_args: NumArgs::Exactly(1) }),
-            ("down", CommandData { handler: Self::down_handler, num_args: NumArgs::Exactly(1) }),
-            ("send", CommandData { handler: Self::send_handler, num_args: NumArgs::Any }),
+            ("li", CommandData { handler: Box::new(Self::li_handler), num_args: NumArgs::Exactly(0) }), 
+            ("ln", CommandData { handler: Box::new(Self::ln_handler), num_args: NumArgs::Exactly(0) }), 
+            ("lr", CommandData { handler: Box::new(Self::lr_handler), num_args: NumArgs::Exactly(0) }),
+            ("up", CommandData { handler: Box::new(Self::up_handler), num_args: NumArgs::Exactly(1) }),
+            ("down", CommandData { handler: Box::new(Self::down_handler), num_args: NumArgs::Exactly(1) }),
+            ("send", CommandData { handler: Box::new(Self::send_handler), num_args: NumArgs::Any }),
         ];
         base_commands.drain(..).map(|(name, cd)| (name.to_string(), cd)).collect()
     }
     //BASE COMMAND HANDLERS
-    /*
-    fn li_handler(&self, _args: Vec<String>) { self.backend().li() }
-    fn ln_handler(&self, _args: Vec<String>) { self.backend().ln() }
-    fn lr_handler(&self, _args: Vec<String>) { self.backend().lr() }
-    fn up_handler(&self, mut args: Vec<String>) { self.backend().up(args.remove(0)) }
-    fn down_handler(&self, mut args: Vec<String>) { self.backend().down(args.remove(0)) }
-    fn send_handler(&self, mut args: Vec<String>) {  
-        let parsed = Self::parse_send(&mut args);
-        let dst_ip = match parsed.0.parse::<Ipv4Addr>() {
-            Ok(ip_addr) => ip_addr,
-            Err(_) => return eprintln!("Input IP address is not a valid IP address")
-        };
-        let pb = PacketBasis { dst_ip, prot_num: 0, msg: parsed.1.as_bytes().to_vec() };
-        self.backend().raw_send(pb)
-    }*/
     fn li_handler(backend: &dyn VnodeBackend, _args: Vec<String>) { backend.li() }
     fn ln_handler(backend: &dyn VnodeBackend, _args: Vec<String>) { backend.ln() }
     fn lr_handler(backend: &dyn VnodeBackend, _args: Vec<String>) { backend.lr() }
@@ -141,6 +120,14 @@ pub trait VnodeRepl<Backend: VnodeBackend> {
         };
         let pb = PacketBasis { dst_ip, prot_num: 0, msg: parsed.1.as_bytes().to_vec() };
         backend.raw_send(pb)
+    }
+    //UTILITY - should really be contained only in IpHandler but nope, for backwards compatability
+    fn string_ip(raw_ip: [u8; 4]) -> String {
+        Vec::from(raw_ip)
+            .iter()
+            .map(|num| num.to_string())
+            .collect::<Vec<String>>()
+            .join(".")
     }
 }
 

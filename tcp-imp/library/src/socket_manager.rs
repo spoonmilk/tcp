@@ -11,78 +11,66 @@ pub struct SocketManager {
     // TODO: Make u16, not usize, as no sockets should have id > 65535
     socket_table: Arc<RwLock<SocketTable>>,
     listener_table: ListenerTable,
-    backend_sender: Sender<String>,
-    ip_sender: Sender<PacketBasis>
+    //backend_sender: Sender<String>,
+    ip_sender: Arc<Sender<PacketBasis>>
 }
 
 impl SocketManager {
-    pub fn new(local_ip: Ipv4Addr, socket_table: Arc<RwLock<SocketTable>>, backend_sender: Sender<String>, ip_sender: Sender<PacketBasis>) -> SocketManager {
-        SocketManager { local_ip, socket_table, listener_table: HashMap::new(), backend_sender, ip_sender }
-    }
-    pub fn run(self, backend_recver: Receiver<SockMand>, ip_recver: Receiver<Packet>) {
-        //Protect self
-        let slf_mutex1 = Arc::new(Mutex::new(self));
-        let slf_mutex2 = Arc::clone(&slf_mutex1);
-        //Listen for commands from the backend
-        thread::spawn(move || SocketManager::listen_backend(slf_mutex1, backend_recver));
-        SocketManager::listen_ip(slf_mutex2, ip_recver);
-    }
-    fn listen_backend(slf_mutex: Arc<Mutex<Self>>, backend_recver: Receiver<SockMand>) -> () {
-        loop {
-            let incoming_command = backend_recver.recv().unwrap();
-            let mut slf = slf_mutex.lock().unwrap();
-            match incoming_command {
-                SockMand::Listen(port) => {
-                    // Acquire self lock
-                    let mut slf = slf_mutex.lock().unwrap();
-                    // Modify socket table to add information about the new listener port, state
-                    {
-                        let mut socket_table = slf.socket_table.write().unwrap();
-                        let sid = socket_table.len();
-                        let sock_listen_ent = ListenEntry { port, state: Arc::new(RwLock::new(TcpState::Listening)) };
-                        let listen_ent = SocketEntry::Listener(sock_listen_ent);
-                        socket_table.insert(sid, listen_ent);
-                    }
-                    // Modify listener -> default state is not accepting any connections
-                    {
-                        let listener_table = &mut slf.listener_table;
-                        listener_table.insert(port, SocketManager::vlisten());
-                    }
-                },
-                SockMand::Accept(port) => {
-                    slf.vaccept(port);
-                }, 
-                SockMand::Connect(vip, port) => {
-                    slf.init_new_conn(vip, port);
-                }
+    /// Create a new SocketManager, listener table initially empty
+    pub fn new(local_ip: Ipv4Addr, socket_table: Arc<RwLock<SocketTable>>, ip_sender: Arc<Sender<PacketBasis>>) -> SocketManager {
+        SocketManager { local_ip, socket_table, listener_table: HashMap::new(), ip_sender }
+    } 
+    /// Initialize connection socket for incoming packet and either add it to pending connections for listener or add it to socket table
+    pub fn handle_incoming(&mut self, pack: Packet, port: u16) -> () {
+        let head = pack.header;
+        let body = pack.data;
 
+        if head.protocol != IpNumber::from(6) {
+            eprintln!("TCP handler received non-TCP packet, dropping.");
+            return;
+        }
+
+        let tcp_pack = deserialize_tcp(body).expect("Malformed TCP packet");
+        let socket_table = self.socket_table.read().unwrap();
+        //Figure out if a socket exists to handle the packet, pass it to the socket if it does, or tell the proper listener to create a connection socket for it (or drop it if no listeners for it)
+
+        match socket_table.get(&port) {
+            Some(SocketEntry::Connection(_ent)) => {
+                eprintln!("Ouch! Not supposed to be here.");
+            }
+            Some(SocketEntry::Listener(ent)) => {
+                let l_port = ent.port.clone();
+                drop(socket_table);
+                self.listener_recv(l_port, head, tcp_pack);
+            }
+            None => {
+                panic!("Internal logic issue - check proper_socket");
             }
         }
     }
-    fn listen_ip(slf_mutex: Arc<Mutex<Self>>, ip_recver: Receiver<Packet>) -> () {
-        loop {
-            //Listen for an incoming IP packet from IP daemon
-            let incoming_packet = ip_recver.recv().expect("Error receiving from IpDaemon");
-            //Lock self and self.socket_table and deserialize the tcp packet
-            let mut slf = slf_mutex.lock().unwrap();
-            let tcp_pack = deserialize_tcp(incoming_packet.data).expect("Malformed TCP packet");
-            let socket_table = slf.socket_table.read().unwrap();
-            //Figure out if a socket exists to handle the packet, pass it to the socket if it does, or tell the proper listener to create a connection socket for it (or drop it if no listeners for it)
-            match SocketManager::proper_socket(&incoming_packet.header, &tcp_pack, &socket_table) {
-                Some(sock_id) => {
-                    let sock_entry = socket_table.get(&sock_id).expect("Internal logic issue - check proper_socket");
-                    match sock_entry {
-                        SocketEntry::Connection(ent) => ent.sender.send(SocketCmd::Process(tcp_pack)).expect("Error sending tcppacket to connection socket"),
-                        SocketEntry::Listener(ent) => { //Blegh, ownership
-                            let port = ent.port.clone();
-                            drop(socket_table);
-                            slf.listener_recv(port, incoming_packet.header, tcp_pack)
-                        }
-                    }
-                }
-                None => {} //Drop the packet - no sockets care about it lol
-            }
+    /// Adds a listener to the listener table and socket table
+    pub fn listen(&mut self, port: u16) -> () {
+        {
+            let mut socket_table = self.socket_table.write().unwrap();
+            let sid = socket_table.len() as u16 + 1;
+            let sock_listen_ent = ListenEntry::new(port);
+            let listen_ent = SocketEntry::Listener(sock_listen_ent);
+            socket_table.insert(sid, listen_ent);
         }
+
+        {
+            self.listener_table.insert(port, ListenerEntry::new());
+        }
+    }
+    /// Opens a listener on <port> to accepting new connections
+    pub fn accept(&mut self, port: u16) -> () {
+        let listener_table = &mut self.listener_table;
+        match listener_table.get_mut(&port) {
+            Some(listener) => {
+                listener.accepting = true;
+            },
+            None => return // Listener was closed in the before this function got c
+        };
     }
     ///Finds the proper socket for a TcpPacket given an associated IP header
     ///NOTE: Takes the socket table as an input to avoid nasty synchronization bugs - this might actually be unnecessary now that I think about it lol
@@ -121,12 +109,17 @@ impl SocketManager {
         let src_addr = TcpAddress::new(Ipv4Addr::from(ip_head.destination), tcp_pack.header.destination_port);
         let dst_addr = TcpAddress::new(Ipv4Addr::from(ip_head.source), tcp_pack.header.source_port);
         let state = Arc::new(RwLock::new(TcpState::SynRecvd)); //Always start in syn recved state when spawned by listener socket
-        let conn_sock = ConnectionSocket::new(state, src_addr.clone(), dst_addr.clone(), self.backend_sender.clone(), self.ip_sender.clone());
+        
+        // Clone arc of ip_sender, create new connection socket
+        let ip_send = self.ip_sender.clone();
+        let conn_sock = ConnectionSocket::new(state, src_addr.clone(), dst_addr.clone(), ip_send);
         let (sock_sender, sockman_recver) = channel::<SocketCmd>();
+
+        let mut sock_table = self.socket_table.write().unwrap();
         let pending_conn = PendingConn { sock: conn_sock, sockman_recver, sock_sender };
         //Decide whether to immediately start connection or stash it for later depending on whether the listener is accepting
         match listener.accepting {
-            true => self.start_connection(pending_conn), //Technically, if we wanted to be fully faithful to a true socket API, we would set accepting back to false here, but this doesn't actually need to happen, so...
+            true => pending_conn.start(&mut sock_table), //Technically, if we wanted to be fully faithful to a true socket API, we would set accepting back to false here, but this doesn't actually need to happen, so...
             false => listener.pending_connections.push(pending_conn)
         }
     }
@@ -134,28 +127,19 @@ impl SocketManager {
     /// Default socket state will be AwaitingRun
     /// 
     /// NOTE: The socket table is locked during this operation
-    fn init_new_conn(&mut self, dst_vip: Ipv4Addr, dst_port: u16) -> () {
+    fn init_new_conn(&self, dst_vip: Ipv4Addr, dst_port: u16) -> () {
         let conn_src_addr = self.unused_tcp_addr();
         let conn_dst_addr = TcpAddress::new(dst_vip, dst_port);
         let init_state = Arc::new(RwLock::new(TcpState::AwaitingRun));
-        let conn_sock = ConnectionSocket::new(init_state, conn_src_addr.clone(), conn_dst_addr.clone(), self.backend_sender.clone(), self.ip_sender.clone());
+        // Clone arc of ip_sender, create new connection socket
+        let ip_send = self.ip_sender.clone();
+        let conn_sock = ConnectionSocket::new(init_state, conn_src_addr.clone(), conn_dst_addr.clone(), ip_send);
         let (conn_send, conn_recv) = channel::<SocketCmd>();
-        self.start_connection(PendingConn::new(conn_sock, conn_recv, conn_send));
-    }
-    /// Takes in a pending connection and spawns it as a new thread
-    fn start_connection(&mut self, pending_conn: PendingConn) -> () {
-        let mut socket_table = self.socket_table.write().unwrap();
-        //Create entry on socket table and add it
-        let sid = socket_table.len();
-        let src_addr = (&pending_conn.sock.src_addr).clone();
-        let dst_addr = (&pending_conn.sock.dst_addr).clone();
-        let state = Arc::clone(&pending_conn.sock.state);
-        let ent = ConnectionEntry { src_addr, dst_addr, state, sender: pending_conn.sock_sender};
-        let ent = SocketEntry::Connection(ent);
-        socket_table.insert(sid, ent);
-        //Run connection socket
-        thread::spawn(move || pending_conn.sock.run(pending_conn.sockman_recver));
-    }
+        let new_conn = PendingConn::new(conn_sock, conn_recv, conn_send);
+
+        let mut sock_table = self.socket_table.write().unwrap();
+        new_conn.start(&mut sock_table);
+    } 
     /// Generates a new unused TCP address on the local IP
     fn unused_tcp_addr(&self) -> TcpAddress {
         // Acquire local ip
@@ -168,27 +152,13 @@ impl SocketManager {
         }
         // Return a new TcpAddress with the local IP and a random port
         TcpAddress::new(local_ip, port as u16)
-    }
-    /// Returns a new ListenerEntry
-    fn vlisten() -> ListenerEntry{
-        ListenerEntry { accepting: false, pending_connections: Vec::new() }
-    }
-    /// Opens a listener on <port> to accepting new connections
-    fn vaccept(&mut self, port: u16) -> () {
-        let listener_table = &mut self.listener_table;
-        match listener_table.get_mut(&port) {
-            Some(listener) => {
-                listener.accepting = true;
-            },
-            None => return // Listener was closed in the before this function got c
-        };
-    }
+    } 
 }
 
 //Socket manager utils
 //Had to move these out of tcp_utils because conn_socket depends on tcp_utils but these data structures depend on conn_socket...
 
-pub type SocketId = usize;
+pub type SocketId = u16;
 pub type SocketTable = HashMap<SocketId, SocketEntry>;
 pub type ListenerTable = HashMap<u16, ListenerEntry>;
 
@@ -202,17 +172,28 @@ pub struct ConnectionEntry {
     pub src_addr: TcpAddress,
     pub dst_addr: TcpAddress, 
     pub state: Arc<RwLock<TcpState>>,
-    pub sender: Sender<SocketCmd>
+    //pub sender: Sender<SocketCmd>
+    pub sock: Arc<Mutex<ConnectionSocket>>
 }
 
 pub struct ListenEntry { 
     pub port: u16,
     pub state: Arc<RwLock<TcpState>>
 }
+impl ListenEntry {
+    pub fn new(port: u16) -> ListenEntry {
+        ListenEntry { port, state: Arc::new(RwLock::new(TcpState::Listening)) }
+    }
+}
 
 pub struct ListenerEntry {
     pub accepting: bool,
     pub pending_connections: Vec<PendingConn>
+}
+impl ListenerEntry {
+    pub fn new() -> ListenerEntry {
+        ListenerEntry { accepting: false, pending_connections: Vec::new() }
+    }
 }
 
 pub struct PendingConn {
@@ -225,4 +206,78 @@ impl PendingConn {
     pub fn new(sock: ConnectionSocket, sockman_recver: Receiver<SocketCmd>, sock_sender: Sender<SocketCmd>) -> PendingConn {
         PendingConn { sock, sockman_recver, sock_sender }
     }
+    /// Takes in a pending connection and spawns it as a new thread
+    pub fn start(self, socket_table: &mut RwLockWriteGuard<SocketTable>) -> () {
+        //Create entry on socket table and add it
+        let sid = socket_table.len() as SocketId;
+        let src_addr = (&self.sock.src_addr).clone();
+        let dst_addr = (&self.sock.dst_addr).clone();
+        let state = Arc::clone(&self.sock.state);
+        let sock = Arc::new(Mutex::new(self.sock));
+        // TODO: refactor after connectionsocket change
+        let ent = ConnectionEntry { src_addr, dst_addr, state, sock };
+        let ent = SocketEntry::Connection(ent);
+        socket_table.insert(sid, ent);
+    }
 }
+
+// BEWARE ALL YE WHO ENTER: THE LEGACY CODE ZONE
+// 
+//    fn listen_backend(slf_mutex: Arc<Mutex<Self>>, backend_recver: Receiver<SockMand>) -> () {
+//        loop {
+//            let incoming_command = backend_recver.recv().unwrap();
+//            let mut slf = slf_mutex.lock().unwrap();
+//            match incoming_command {
+//                SockMand::Listen(port) => {
+//                    // Acquire self lock
+//                    let mut slf = slf_mutex.lock().unwrap();
+//                    // Modify socket table to add information about the new listener port, state
+//                    {
+//                        let mut socket_table = slf.socket_table.write().unwrap();
+//                        let sid = socket_table.len();
+//                        let sock_listen_ent = ListenEntry { port, state: Arc::new(RwLock::new(TcpState::Listening)) };
+//                        let listen_ent = SocketEntry::Listener(sock_listen_ent);
+//                        socket_table.insert(sid, listen_ent);
+//                    }
+//                    // Modify listener -> default state is not accepting any connections
+//                    {
+//                        let listener_table = &mut slf.listener_table;
+//                        listener_table.insert(port, SocketManager::vlisten());
+//                    }
+//                },
+//                SockMand::Accept(port) => {
+//                    slf.vaccept(port);
+//                }, 
+//                SockMand::Connect(vip, port) => {
+//                    slf.init_new_conn(vip, port);
+//                }
+//
+//            }
+//        }
+//    }
+// 
+//     fn listen_ip(slf_mutex: Arc<Mutex<Self>>, ip_recver: Receiver<Packet>) -> () {
+//         loop {
+//             //Listen for an incoming IP packet from IP daemon
+//             let incoming_packet = ip_recver.recv().expect("Error receiving from IpDaemon");
+//             //Lock self and self.socket_table and deserialize the tcp packet
+//             let mut slf = slf_mutex.lock().unwrap();
+//             let tcp_pack = deserialize_tcp(incoming_packet.data).expect("Malformed TCP packet");
+//             let socket_table = slf.socket_table.read().unwrap();
+//             //Figure out if a socket exists to handle the packet, pass it to the socket if it does, or tell the proper listener to create a connection socket for it (or drop it if no listeners for it)
+//             match SocketManager::proper_socket(&incoming_packet.header, &tcp_pack, &socket_table) {
+//                 Some(sock_id) => {
+//                     let sock_entry = socket_table.get(&sock_id).expect("Internal logic issue - check proper_socket");
+//                     match sock_entry {
+//                         SocketEntry::Connection(ent) => ent.sender.send(SocketCmd::Process(tcp_pack)).expect("Error sending tcppacket to connection socket"),
+//                         SocketEntry::Listener(ent) => { //Blegh, ownership
+//                             let port = ent.port.clone();
+//                             drop(socket_table);
+//                             slf.listener_recv(port, incoming_packet.header, tcp_pack)
+//                         }
+//                     }
+//                 }
+//                 None => {} //Drop the packet - no sockets care about it lol
+//             }
+//         }
+//     }

@@ -3,14 +3,14 @@ use crate::rip_utils::*;
 use crate::utils::*;
 use crate::vnode_traits::*;
 use crate::rip_trait::RipDaemon;
-use crate::tcp_utils::*;
+//use crate::tcp_utils::*;
 
 #[derive(Debug)]
 pub struct HostIpDaemon {
     interface_reps: Arc<RwLock<InterfaceTable>>, //Maps an interface's name to its associated InterfaceRep
     interface_recvers: InterfaceRecvers,
     forwarding_table: Arc<RwLock<ForwardingTable>>,
-    backend_sender: Sender<String>
+    backend_sender: Sender<Packet>
 }
 
 impl VnodeIpDaemon for HostIpDaemon {
@@ -18,7 +18,7 @@ impl VnodeIpDaemon for HostIpDaemon {
     fn interface_recvers(&self) -> &InterfaceRecvers { &self.interface_recvers }
     fn forwarding_table(&self) -> RwLockReadGuard<ForwardingTable> { self.forwarding_table.read().unwrap() }
     fn forwarding_table_mut(&self) -> RwLockWriteGuard<ForwardingTable> { self.forwarding_table.write().unwrap() }
-    fn backend_sender(&self) -> &Sender<String> { &self.backend_sender }
+    fn backend_sender(&self) -> &Sender<Packet> { &self.backend_sender }
     // TODO: SHOULD TAKE OTHER PROTOCOLS
     fn local_protocols(&self, protocol: IpNumber, _pack: Packet) -> () {
         match protocol {
@@ -32,8 +32,8 @@ impl HostIpDaemon {
         interface_reps: Arc<RwLock<InterfaceTable>>,
         interface_recvers: InterfaceRecvers,
         forwarding_table: Arc<RwLock<ForwardingTable>>,
-        backend_sender: Sender<String>,
-        sockman_sender: Sender<SockMand>
+        backend_sender: Sender<Packet>,
+        //sockman_sender: Sender<SockMand>
     ) -> HostIpDaemon {
         HostIpDaemon {
             interface_reps,
@@ -61,7 +61,7 @@ pub struct RouterIpDaemon {
     interface_recvers: InterfaceRecvers,
     forwarding_table: Arc<RwLock<ForwardingTable>>,
     rip_neighbors: RipNeighbors, // Stores route information learned about from neighbors
-    backend_sender: Sender<String>
+    backend_sender: Sender<Packet>
 }
 
 impl VnodeIpDaemon for RouterIpDaemon {
@@ -69,7 +69,7 @@ impl VnodeIpDaemon for RouterIpDaemon {
     fn interface_recvers(&self) -> &InterfaceRecvers { &self.interface_recvers }
     fn forwarding_table(&self) -> RwLockReadGuard<ForwardingTable> { self.forwarding_table.read().unwrap() }
     fn forwarding_table_mut(&self) -> RwLockWriteGuard<ForwardingTable> { self.forwarding_table.write().unwrap() }
-    fn backend_sender(&self) -> &Sender<String> { &self.backend_sender }
+    fn backend_sender(&self) -> &Sender<Packet> { &self.backend_sender }
     /// Take in a packet destined for the current node and display information from it
     fn local_protocols(&self, protocol: IpNumber, pack: Packet) -> () {
         match protocol {
@@ -92,7 +92,7 @@ impl RouterIpDaemon {
         interface_recvers: InterfaceRecvers,
         forwarding_table: Arc<RwLock<ForwardingTable>>,
         rip_neighbors: RipNeighbors,
-        backend_sender: Sender<String>
+        backend_sender: Sender<Packet>
     ) -> RouterIpDaemon {
         RouterIpDaemon {
             interface_reps,

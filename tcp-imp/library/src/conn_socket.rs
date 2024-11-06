@@ -2,76 +2,70 @@ use crate::prelude::*;
 use crate::utils::*;
 use crate::tcp_utils::*;
 
+#[derive(Debug)]
 pub struct ConnectionSocket {
     pub state: Arc<RwLock<TcpState>>,
     pub src_addr: TcpAddress,
     pub dst_addr: TcpAddress,
-    backend_sender: Sender<String>,
-    ip_sender: Sender<PacketBasis>,
+    ip_sender: Arc<Sender<PacketBasis>>,
     seq_num: u32,
     ack_num: u32,
     win_size: u16
 }
+/* 
+impl ConnectionSocket {
+    pub fn handle_packet(slf: Arc<Mutex<Self>>, tpack: TcpPacket) -> () {
+        //Process packet via typical state machine functioning (looks a lot like run does)
+    }
+    pub fn recv(slf: Arc<Mutex<Self>>, bytes: u16) -> (u16, Vec<u8>) {
+        //Pulls up to bytes data out of recv buffer and returns amount of bytes read plus the data as a string
+    }
+    pub fn send(slf: Arc<Mutex<Self>>, to_send: Vec<u8>) -> () {
+        //Loops through sending packets of max size 1500 bytes until everything's been sent 
+    }
+}
+*/
 
 impl ConnectionSocket {
-    pub fn new(state: Arc<RwLock<TcpState>>, src_addr: TcpAddress, dst_addr: TcpAddress, backend_sender: Sender<String>, ip_sender: Sender<PacketBasis>) -> ConnectionSocket {
+    pub fn new(state: Arc<RwLock<TcpState>>, src_addr: TcpAddress, dst_addr: TcpAddress, ip_sender: Arc<Sender<PacketBasis>>) -> ConnectionSocket {
         let mut rand_rng = rand::thread_rng();
         let seq_num = rand_rng.gen::<u32>()/2;
-        ConnectionSocket { state, src_addr, dst_addr, backend_sender, ip_sender, seq_num, ack_num: 0, win_size: 5000 }
-    }
-    /// Runs an initialized TCP connection socket
-    pub fn run(self, sockman_recver: Receiver<SocketCmd>) -> () {
-        loop {
-            let command = sockman_recver.recv().expect("Error receiving from Socket Manager");
-            let new_state = {
-                let state = self.state.read().unwrap();
-                match *state {
-                    TcpState::Listening => panic!("I'm a freaking connection socket, why would I ever be in the listening state?!?"),
-                    TcpState::SynSent => self.syn_sent_handle(command),
-                    TcpState::SynRecvd => self.syn_recved_handle(command),
-                    TcpState::Established => self.established_handle(command),
-                    _ => panic!("I don't know what to do in these states yet!")
-                }
-            };
-            let mut state = self.state.write().unwrap();
-            *state = new_state;
-        }
-    }
-    fn syn_sent_handle(&self, cmd: SocketCmd) -> TcpState {
-        match cmd {
-            SocketCmd::Process(tpack) if has_only_flags(&tpack.header, SYN | ACK) => {
-                let new_pack = self.build_packet(Vec::new(), ACK);
-                let pbasis = self.packet_basis(new_pack);
-                self.ip_sender.send(pbasis).expect("Error sending packet to IP Daemon");
-                return TcpState::Established;
+        ConnectionSocket { state, src_addr, dst_addr, seq_num, ip_sender, ack_num: 0, win_size: 5000 }
+    } 
+    pub fn handle_packet(slf: Arc<Mutex<Self>>, tpack: TcpPacket) {
+        let slf = slf.lock().unwrap(); 
+        let new_state = {
+            let slf_state = slf.state.write().unwrap();
+                match *slf_state {
+                TcpState::SynSent => slf.process_syn_ack(tpack),
+                TcpState::SynRecvd => slf.process_ack(tpack), 
+                TcpState::Established => slf.established_handle(tpack),
+                _ => panic!("State not implemented!")
             }
-            SocketCmd::Process(_) => eprintln!("Received packet in SynSent state without proper flags SYN + ACK"),
-            SocketCmd::Send(_) | SocketCmd::Recv(_) => println!("I can't do that yet, not established"),
-            _ => println!("I don't know that one yet *shrug*")
+        };
+        let mut state = slf.state.write().unwrap();
+        *state = new_state;
+    }
+    fn process_syn_ack(&self, tpack: TcpPacket) -> TcpState {
+        if has_only_flags(&tpack.header, SYN | ACK) {
+            let new_pack = self.build_packet(Vec::new(), ACK);
+            let pbasis = self.packet_basis(new_pack);
+            self.ip_sender.send(pbasis).expect("Error sending TCP packet to IP Daemon");
+            return TcpState::Established
         }
         TcpState::SynSent
     }
-    fn syn_recved_handle(&self, cmd: SocketCmd) -> TcpState {
-        match cmd {
-            SocketCmd::Process(tpack) if has_only_flags(&tpack.header, ACK) => {
-                println!("Received final ack, TCP handshake succesful!");
-                //Check if packet is ack and all that jazz
-                let mut slf_state = self.state.write().unwrap();
-                *slf_state = TcpState::Established; 
-            },
-            SocketCmd::Process(_) => eprintln!("Received packet in SynRecvd state without proper flags ACK"),
-            SocketCmd::Send(_) | SocketCmd::Recv(_) => println!("I can't do that yet, not established"),
-            _ => println!("I don't know that one yet *shrug*")
+    fn process_ack(&self, tpack: TcpPacket) -> TcpState {
+        if has_only_flags(&tpack.header, ACK) {
+            println!("Received final acknowledgement, TCP handshake successful!");
+            let mut slf_state = self.state.write().unwrap();
+            *slf_state = TcpState::Established;
+            return TcpState::Established
         }
         TcpState::SynRecvd
-    }
-    fn established_handle(&self, cmd: SocketCmd) -> TcpState {
-        match cmd {
-            SocketCmd::Process(_tpack) => println!("I got a packet weee!"),
-            SocketCmd::Send(_tpack) => println!("You want me to send a packet...? I dunno how to do that..."),
-            SocketCmd::Recv(_bytes) => println!("Erm, I got nothing for ya"),
-            _ => println!("I don't know that one yet *shrug*")
-        }
+    } 
+    fn established_handle(&self, _tpack: TcpPacket) -> TcpState {
+        println!("I got a packet wee!!!");
         TcpState::Established
     }
     fn build_packet(&self, payload: Vec<u8>, flags: u8) -> TcpPacket {
@@ -114,3 +108,24 @@ impl ConnectionSocket {
         }
     }
 }
+
+// !! DANGER !! YOU ARE ENTERING THE LEGACY CODE ZONE
+
+// /// Runs an initialized TCP connection socket
+    // pub fn run(self, sockman_recver: Receiver<SocketCmd>) -> () {
+    //     loop {
+    //         let command = sockman_recver.recv().expect("Error receiving from Socket Manager");
+    //         let new_state = {
+    //             let state = self.state.read().unwrap();
+    //             match *state {
+    //                 TcpState::Listening => panic!("I'm a freaking connection socket, why would I ever be in the listening state?!?"),
+    //                 TcpState::SynSent => self.syn_sent_handle(command),
+    //                 TcpState::SynRecvd => self.syn_recved_handle(command),
+    //                 TcpState::Established => self.established_handle(command),
+    //                 _ => panic!("I don't know what to do in these states yet!")
+    //             }
+    //         };
+    //         let mut state = self.state.write().unwrap();
+    //         *state = new_state;
+    //     }
+    // }

@@ -126,7 +126,7 @@ pub fn is_syn(head: &TcpHeader) -> bool {
     }
 }
 
-
+/*
 /// Commands to the socket manager ; not the sockets themselves
 pub enum SockMand { 
     Listen(u16), // Creates a listener socket on <port>
@@ -134,6 +134,7 @@ pub enum SockMand {
     Connect(Ipv4Addr, u16) // Creates a connection socket to <ip> on <port>
     //More to come
 }
+*/
 
 /// Commands to the sockets ; not the socket manager
 pub enum SocketCmd {

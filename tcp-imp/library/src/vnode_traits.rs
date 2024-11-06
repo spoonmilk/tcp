@@ -120,7 +120,7 @@ pub trait VnodeIpDaemon {
     fn interface_recvers(&self) -> &InterfaceRecvers;
     fn forwarding_table(&self) -> RwLockReadGuard<ForwardingTable>;
     fn forwarding_table_mut(&self) -> RwLockWriteGuard<ForwardingTable>;
-    fn backend_sender(&self) -> &Sender<String>;
+    fn backend_sender(&self) -> &Sender<Packet>;
     /// Listen for REPL commands to the node
     fn backend_listen<T: VnodeIpDaemon>(
         slf_mutex: Arc<Mutex<T>>,
@@ -324,14 +324,8 @@ pub trait VnodeIpDaemon {
             None => Err(Error::new(ErrorKind::Other, "No matching prefix found")),
         }
     }
-    fn string_ip(raw_ip: [u8; 4]) -> String {
-        Vec::from(raw_ip)
-            .iter()
-            .map(|num| num.to_string())
-            .collect::<Vec<String>>()
-            .join(".")
-    }
     fn process_test_packet(&self, pack: Packet) -> () {
+        /*
         let src = <Self as VnodeIpDaemon>::string_ip(pack.header.source);
         let dst = <Self as VnodeIpDaemon>::string_ip(pack.header.destination);
         let ttl = pack.header.time_to_live;
@@ -341,8 +335,9 @@ pub trait VnodeIpDaemon {
             "Received tst packet: Src: {}, Dst: {}, TTL: {}, {}",
             src, dst, ttl, msg
         );
+        */
         self.backend_sender()
-            .send(retstr)
+            .send(pack)
             .expect("Could not send to backend"); 
     }
     fn process_packet(&self, pack: Packet) -> () {
