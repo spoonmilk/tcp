@@ -1,11 +1,10 @@
-use etherparse::err::tcp;
 use rand::Rng;
 use crate::prelude::*;
 use crate::tcp_utils::*;
 use crate::utils::*;
 use crate::conn_socket::ConnectionSocket;
 
-struct SocketManager {
+pub struct SocketManager {
     // TODO: If time allows, get rid of reference to backend and replace with functions to communicate between 
     // IP daemon and socket manager
     local_ip: Ipv4Addr,
@@ -13,11 +12,11 @@ struct SocketManager {
     socket_table: Arc<RwLock<SocketTable>>,
     listener_table: ListenerTable,
     backend_sender: Sender<String>,
-    ip_sender: Sender<TcpPacket>
+    ip_sender: Sender<PacketBasis>
 }
 
 impl SocketManager {
-    pub fn new(local_ip: Ipv4Addr, socket_table: Arc<RwLock<SocketTable>>, backend_sender: Sender<String>, ip_sender: Sender<TcpPacket>) -> SocketManager {
+    pub fn new(local_ip: Ipv4Addr, socket_table: Arc<RwLock<SocketTable>>, backend_sender: Sender<String>, ip_sender: Sender<PacketBasis>) -> SocketManager {
         SocketManager { local_ip, socket_table, listener_table: HashMap::new(), backend_sender, ip_sender }
     }
     pub fn run(self, backend_recver: Receiver<SockMand>, ip_recver: Receiver<Packet>) {

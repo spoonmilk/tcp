@@ -1,4 +1,5 @@
 use crate::prelude::*;
+use crate::utils::*;
 use crate::tcp_utils::*;
 
 pub struct ConnectionSocket {
@@ -6,13 +7,19 @@ pub struct ConnectionSocket {
     pub src_addr: TcpAddress,
     pub dst_addr: TcpAddress,
     backend_sender: Sender<String>,
-    ip_sender: Sender<TcpPacket>
+    ip_sender: Sender<PacketBasis>,
+    seq_num: u32,
+    ack_num: u32,
+    win_size: u16
 }
 
 impl ConnectionSocket {
-    pub fn new(state: Arc<RwLock<TcpState>>, src_addr: TcpAddress, dst_addr: TcpAddress, backend_sender: Sender<String>, ip_sender: Sender<TcpPacket>) -> ConnectionSocket {
-        ConnectionSocket { state, src_addr, dst_addr, backend_sender, ip_sender }
+    pub fn new(state: Arc<RwLock<TcpState>>, src_addr: TcpAddress, dst_addr: TcpAddress, backend_sender: Sender<String>, ip_sender: Sender<PacketBasis>) -> ConnectionSocket {
+        let mut rand_rng = rand::thread_rng();
+        let seq_num = rand_rng.gen::<u32>()/2;
+        ConnectionSocket { state, src_addr, dst_addr, backend_sender, ip_sender, seq_num, ack_num: 0, win_size: 5000 }
     }
+    /// Runs an initialized TCP connection socket
     pub fn run(self, sockman_recver: Receiver<SocketCmd>) -> () {
         loop {
             let command = sockman_recver.recv().expect("Error receiving from Socket Manager");
@@ -32,9 +39,13 @@ impl ConnectionSocket {
     }
     fn syn_sent_handle(&self, cmd: SocketCmd) -> TcpState {
         match cmd {
-            SocketCmd::Process(_tpack) => {
-                //Check if packet is syn + ack and all that jazz
-            },
+            SocketCmd::Process(tpack) if has_only_flags(&tpack.header, SYN | ACK) => {
+                let new_pack = self.build_packet(Vec::new(), ACK);
+                let pbasis = self.packet_basis(new_pack);
+                self.ip_sender.send(pbasis).expect("Error sending packet to IP Daemon");
+                return TcpState::Established;
+            }
+            SocketCmd::Process(_) => eprintln!("Received packet in SynSent state without proper flags SYN + ACK"),
             SocketCmd::Send(_) | SocketCmd::Recv(_) => println!("I can't do that yet, not established"),
             _ => println!("I don't know that one yet *shrug*")
         }
@@ -42,9 +53,13 @@ impl ConnectionSocket {
     }
     fn syn_recved_handle(&self, cmd: SocketCmd) -> TcpState {
         match cmd {
-            SocketCmd::Process(_tpack) => {
+            SocketCmd::Process(tpack) if has_only_flags(&tpack.header, ACK) => {
+                println!("Received final ack, TCP handshake succesful!");
                 //Check if packet is ack and all that jazz
+                let mut slf_state = self.state.write().unwrap();
+                *slf_state = TcpState::Established; 
             },
+            SocketCmd::Process(_) => eprintln!("Received packet in SynRecvd state without proper flags ACK"),
             SocketCmd::Send(_) | SocketCmd::Recv(_) => println!("I can't do that yet, not established"),
             _ => println!("I don't know that one yet *shrug*")
         }
@@ -58,5 +73,44 @@ impl ConnectionSocket {
             _ => println!("I don't know that one yet *shrug*")
         }
         TcpState::Established
+    }
+    fn build_packet(&self, payload: Vec<u8>, flags: u8) -> TcpPacket {
+        let mut tcp_header = TcpHeader::new(
+            self.src_addr.port.clone(),
+            self.dst_addr.port.clone(),
+            self.seq_num.clone(),
+            self.win_size.clone()
+        );
+        tcp_header.acknowledgment_number = self.ack_num.clone();
+        ConnectionSocket::set_flags(&mut tcp_header, flags);
+        let src_ip = self.src_addr.ip.clone().octets();
+        let dst_ip = self.dst_addr.ip.clone().octets();
+        let checksum = tcp_header.calc_checksum_ipv4_raw(src_ip, dst_ip, payload.as_slice()).expect("Checksum calculation failed");
+        tcp_header.checksum = checksum;
+        return TcpPacket { header: tcp_header, payload };
+    }
+    /// Takes in a TCP header and a u8 representing flags and sets the corresponding flags in the header.
+    fn set_flags(head: &mut TcpHeader, flags: u8) -> () {
+        if flags & SYN != 0 {
+            head.syn = true;
+        } else if flags & ACK != 0 {
+            head.ack = true;
+        } else if flags & FIN != 0 {
+            head.fin = true;
+        } else if flags & RST != 0 {
+            head.rst = true;
+        } else if flags & PSH != 0 {
+            head.psh = true;
+        } else if flags & URG != 0 {
+            head.urg = true;
+        }
+    } 
+    /// Takes in a TCP packet and outputs a Packet Basis for its IP packet
+    fn packet_basis(&self, tpack: TcpPacket) -> PacketBasis {
+        PacketBasis {
+            dst_ip: self.src_addr.ip.clone(),
+            prot_num: 6,
+            msg: serialize_tcp(tpack)
+        }
     }
 }

@@ -3,6 +3,7 @@ use crate::rip_utils::*;
 use crate::utils::*;
 use crate::vnode_traits::*;
 use crate::rip_trait::RipDaemon;
+use crate::tcp_utils::*;
 
 #[derive(Debug)]
 pub struct HostIpDaemon {
@@ -31,7 +32,8 @@ impl HostIpDaemon {
         interface_reps: Arc<RwLock<InterfaceTable>>,
         interface_recvers: InterfaceRecvers,
         forwarding_table: Arc<RwLock<ForwardingTable>>,
-        backend_sender: Sender<String>
+        backend_sender: Sender<String>,
+        sockman_sender: Sender<SockMand>
     ) -> HostIpDaemon {
         HostIpDaemon {
             interface_reps,

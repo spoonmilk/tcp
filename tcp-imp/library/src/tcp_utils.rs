@@ -1,5 +1,4 @@
 use crate::prelude::*;
-use crate::utils::Packet;
 
 #[derive(Debug)]
 pub enum TcpState {
@@ -95,6 +94,7 @@ pub const RST: u8 = 8;
 pub const SYN: u8 = 16;
 pub const FIN: u8 = 32;
 
+/// Takes a TCP header and returns the flags as a u8
 fn header_flags(head: &TcpHeader) -> u8 {
     let bools = [false, false, head.fin, head.syn, head.rst, head.psh, head.ack, head.urg];
     bools.iter()
@@ -102,12 +102,15 @@ fn header_flags(head: &TcpHeader) -> u8 {
         .fold(0, |acc, (i, &b)| acc | ((b as u8) << (7 - i)))
 }
 
-fn has_only_flags(head: &TcpHeader, flags: u8) -> bool {
+/// Checks if a TCP header has only the specified flags
+pub fn has_only_flags(head: &TcpHeader, flags: u8) -> bool {
     let head_flags = header_flags(&head);
+    // The better/only way of checking equality
     (head_flags ^ flags) == 0
 }
 
-fn has_flags(head: &TcpHeader, flags: u8) -> bool {
+/// Checks if a TCP header has the specified flags, ignoring other flags
+pub fn has_flags(head: &TcpHeader, flags: u8) -> bool {
     let head_flags = header_flags(&head);
     (head_flags & flags) == flags
 }

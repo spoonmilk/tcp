@@ -2,7 +2,9 @@ use crate::interface::*;
 use crate::ip_daemons::{RouterIpDaemon, HostIpDaemon};
 use crate::prelude::*;
 use crate::utils::*;
+use crate::tcp_utils::*;
 use crate::backends::{ HostBackend, RouterBackend, Backend };
+use crate::socket_manager::SocketManager;
 
 fn init_interfaces(
     interfaces: Vec<InterfaceConfig>,
@@ -63,12 +65,13 @@ pub fn initialize(config_info: IPConfig) -> Result<(Backend, Receiver<String>)> 
     let backend_forwarding_table = Arc::new(RwLock::new(forwarding_table));
     let ipdaemon_forwarding_table = Arc::clone(&backend_forwarding_table);
     //Make bichan for between Ipdaemon and Backend
-    let (backend_bichan, ipdaemon_bichan) = BiChan::<PacketBasis, String>::make_bichans();
-    let ip_recver = backend_bichan.recv;
+    //let (backend_bichan, ipdaemon_bichan) = BiChan::<PacketBasis, String>::make_bichans();
+    let (backend_sender, ip_recver) = channel::<String>();
+    let (ip_sender, backend_recver) = channel::<PacketBasis>();
     match config_info.routing_mode {
         RoutingType::Rip => {
             //Make router backend
-            let backend = RouterBackend::new(backend_interface_reps, backend_forwarding_table, backend_bichan.send);
+            let backend = RouterBackend::new(backend_interface_reps, backend_forwarding_table, backend_sender);
             //Create RIP neighbors table
             let mut rip_table = HashMap::new();
             let rip_neighbors = match config_info.rip_neighbors {
@@ -77,27 +80,33 @@ pub fn initialize(config_info: IPConfig) -> Result<(Backend, Receiver<String>)> 
             };
             add_rip_neighbors(&mut rip_table, rip_neighbors);
             //Construct and run ipdaemon
-            let ipdaemon = RouterIpDaemon::new(ipdaemon_interface_reps, interface_recvers, ipdaemon_forwarding_table, rip_table, ipdaemon_bichan.send);
-            thread::spawn(move || ipdaemon.run(ipdaemon_bichan.recv));
+            let ipdaemon = RouterIpDaemon::new(ipdaemon_interface_reps, interface_recvers, ipdaemon_forwarding_table, rip_table, backend_sender);
+            thread::spawn(move || ipdaemon.run(backend_recver));
             //Return backend and its receiver
             Ok((Backend::Router(backend), ip_recver))
         }
         RoutingType::Static => {
             // TODO: Add creating a socket manager here
-            // // Get local host ip
-            // let local_ip = match interface_reps.get("if0") {
-            //     Some(inter_rep) => inter_rep.v_ip,
-            //     None => panic!("Could not initialize host, no local interface found.")
-            // };
-
-
-
-
+            // Get local host ip
+            let local_ip = match interface_reps.get("if0") {
+                Some(inter_rep) => inter_rep.v_ip,
+                None => panic!("Could not initialize host, no local interface found.")
+            };
             //Make host backend
-            let backend = HostBackend::new(backend_interface_reps, backend_forwarding_table, backend_bichan.send);
+            let (sockman_sockmand_sender, backend_sockmand_recver) = channel::<SockMand>();
+            let (sockman_sockmand_sender, ip_sockmand_recver) = channel::<SockMand>();
+            let socket_table = Arc::new(RwLock::new(HashMap::new()));
+            let backend = HostBackend::new(backend_interface_reps, backend_forwarding_table, socket_table , sockman_sockmand_sender,  ip_sender);
+
+            // Create and config Socket Manager
+            let socket_manager = SocketManager::new(
+                local_ip, socket_table, backend_sender.clone(), ip_sender.clone()
+            );
+            thread::spawn(move || socket_manager.run(backend_sockmand_recver, ip_sockman_recver));
+
             //Construct and run ipdaemon
-            let ipdaemon = HostIpDaemon::new(ipdaemon_interface_reps, interface_recvers, ipdaemon_forwarding_table, ipdaemon_bichan.send);
-            thread::spawn(move || ipdaemon.run(ipdaemon_bichan.recv));
+            let ipdaemon = HostIpDaemon::new(ipdaemon_interface_reps, interface_recvers, ipdaemon_forwarding_table, backend_sender, sockman_sockmand_sender);
+            thread::spawn(move || ipdaemon.run(backend_recver));
             //Return backend and its receiver
             Ok((Backend::Host(backend), ip_recver))
         }
