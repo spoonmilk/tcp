@@ -1,5 +1,6 @@
 use crate::prelude::*;
 use crate::utils::*;
+use std::any::Any;
 
 pub trait VnodeBackend {
     //Getters
@@ -112,6 +113,7 @@ pub trait VnodeBackend {
             panic!("{e:?}")
         }
     }
+    fn as_any(&self) -> &dyn Any;
 }
 
 pub trait VnodeIpDaemon {

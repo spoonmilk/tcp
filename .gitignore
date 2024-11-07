@@ -21,3 +21,6 @@
 
 # Generated nets
 **/linear-r1h2
+
+# Our rust build directory
+./tcp-imp/target

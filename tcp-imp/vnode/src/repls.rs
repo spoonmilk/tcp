@@ -5,7 +5,8 @@ use library::backends::{HostBackend, RouterBackend};
 //use library::vnode_traits::VnodeBackend;
 use library::socket_manager::SocketEntry;
 use library::ip_handler::*;
-use library::utils::*; //Hopefully this can be removed in the future because this stuff shoud be private
+use library::utils::*;
+use library::vnode_traits::VnodeBackend; //Hopefully this can be removed in the future because this stuff shoud be private
 use std::thread;
 use std::sync::mpsc::Receiver;
 use std::sync::Arc;
@@ -21,9 +22,9 @@ impl VnodeRepl<HostBackend> for HostRepl {
     fn command_table_mut(&mut self) -> &mut CommandTable { &mut self.command_table }
     fn get_all_commands(&self) -> Vec<(String, CommandData)> {
         let mut custom_commands = vec![
-            ("a".to_string(), CommandData { handler: Box::new(Self::a_handler), num_args: NumArgs::Exactly(1) }), 
-            ("c".to_string(), CommandData { handler: Box::new(Self::c_handler), num_args: NumArgs::Exactly(2) }), 
-            ("ls".to_string(), CommandData { handler: Box::new(Self::ls_handler), num_args: NumArgs::Exactly(0) }),
+            ("a".to_string(), CommandData { handler: Self::wrap_host_handler(Self::a_handler), num_args: NumArgs::Exactly(1) }), 
+            ("c".to_string(), CommandData { handler: Self::wrap_host_handler(Self::c_handler), num_args: NumArgs::Exactly(2) }), 
+            ("ls".to_string(), CommandData { handler: Self::wrap_host_handler(Self::ls_handler), num_args: NumArgs::Exactly(0) }),
         ];
         let mut all_commands = self.get_base_commands();
         all_commands.append(&mut custom_commands);
@@ -52,6 +53,7 @@ impl HostRepl {
         backend.listen(port.clone());
         backend.accept(port);
     }
+
     pub fn c_handler(backend: &HostBackend, args: Vec<String>) -> () {
         //Sanititze input
         let ip_addr = if let Ok(ip_addr) = args[0].parse::<Ipv4Addr>() { ip_addr } else { return println!("Input IP address \"{}\" invalid", args[0]) };
@@ -69,6 +71,19 @@ impl HostRepl {
             };
             println!("{}", to_print);
         }
+    }
+
+    fn wrap_host_handler<F>(f: F) -> CommandHandler
+    where
+        F: Fn(&HostBackend, Vec<String>) + 'static,
+    {
+        Box::new(move |backend: &dyn VnodeBackend, args: Vec<String>| {
+            if let Some(host_backend) = backend.as_any().downcast_ref::<HostBackend>() {
+                f(host_backend, args);
+            } else {
+                eprintln!("Invalid backend type for this command");
+            }
+        })
     }
 }
 

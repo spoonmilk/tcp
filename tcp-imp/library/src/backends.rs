@@ -26,6 +26,9 @@ impl VnodeBackend for HostBackend {
     fn interface_reps_mut(&self) -> RwLockWriteGuard<InterfaceTable> { self.interface_reps.write().unwrap() }
     fn forwarding_table(&self) -> RwLockReadGuard<ForwardingTable> { self.forwarding_table.read().unwrap() }
     fn ip_sender(&self) -> &Sender<PacketBasis> { &self.ip_sender }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 }
 
 impl HostBackend {
@@ -98,6 +101,9 @@ impl VnodeBackend for RouterBackend {
     fn interface_reps_mut(&self) -> RwLockWriteGuard<InterfaceTable> { self.interface_reps.write().unwrap() }
     fn forwarding_table(&self) -> RwLockReadGuard<ForwardingTable> { self.forwarding_table.read().unwrap() }
     fn ip_sender(&self) -> &Sender<PacketBasis> { &self.ip_sender }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 }
 
 impl RouterBackend {
