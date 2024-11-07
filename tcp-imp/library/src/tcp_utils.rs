@@ -1,6 +1,6 @@
 use crate::prelude::*;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum TcpState {
     Listening, // Listener Socket constant state
     AwaitingRun, // Connection sockets upon creation, waiting to run
@@ -56,34 +56,23 @@ pub fn serialize_tcp(packet: TcpPacket) -> Vec<u8> {
     buffer
 }
 
+
 /// Deserializes a TCP Packet from a Vec<u8> containing a WHOLE IP packet ; do not pass in payloads
 pub fn deserialize_tcp(raw_packet: Vec<u8>) -> Result<TcpPacket> {
-    match Ipv4Header::from_slice(&raw_packet) {
-            Ok((head, rest)) => {
-                let len = (head.total_len - 20) as usize;
-                let pay: Vec<u8> = Vec::from_iter(rest[0..len].iter().cloned());
-                match TcpHeader::from_slice(&pay) {
-                    Ok((header, payload)) => {
-                        return Ok(TcpPacket {
-                            header,
-                            payload: payload.to_vec()
-                        });
-                    }
-                    Err(_) => {
-                        return Err(Error::new(
-                            ErrorKind::InvalidData,
-                            "Failed to read received packet error",
-                        ));
-                    }
-                }
-            }
-            Err(_) => {
-                return Err(Error::new(
-                    ErrorKind::InvalidData,
-                    "Failed to read received packet error",
-                ));
-            }
+    match TcpHeader::from_slice(&raw_packet) {
+        Ok((header, payload)) => {
+            return Ok(TcpPacket {
+                header,
+                payload: payload.to_vec()
+            });
         }
+        Err(_) => {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                "Failed to read received packet error",
+            ));
+        }
+    }
 }
 
 // TCP FLAGS    
@@ -134,7 +123,7 @@ pub enum SockMand {
     Connect(Ipv4Addr, u16) // Creates a connection socket to <ip> on <port>
     //More to come
 }
-*/
+
 
 /// Commands to the sockets ; not the socket manager
 pub enum SocketCmd {
@@ -144,3 +133,4 @@ pub enum SocketCmd {
     Close //Tear down your connection
     //More perhaps
 }
+*/

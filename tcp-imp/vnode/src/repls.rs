@@ -3,7 +3,7 @@ use std::net::Ipv4Addr;
 use crate::repl_trait::*;
 use library::backends::{HostBackend, RouterBackend};
 //use library::vnode_traits::VnodeBackend;
-use library::socket_manager::SocketEntry;
+use library::sockman_utils::*;
 use library::ip_handler::*;
 use library::utils::*;
 use library::vnode_traits::VnodeBackend; //Hopefully this can be removed in the future because this stuff shoud be private
@@ -45,7 +45,7 @@ impl HostRepl {
         thread::spawn(move || ip_handler.run(ip_recver));
         self.run_repl();
     }
-    //Extra
+    //Additional command handlers
     pub fn a_handler(backend: &HostBackend, args: Vec<String>) -> () {
         //Sanititize input
         let port = if let Ok(port) = args[0].parse::<u16>() { port } else { return println!("Input port \"{}\" invalid", args[0]) };
@@ -66,7 +66,7 @@ impl HostRepl {
         println!("SID\tLAddr\t\tLPort\tRAddr\t\tRPort\tState");
         for (sid, ent) in &*socket_table {
             let to_print = match ent {
-                SocketEntry::Connection(ent) => format!("{sid:?}\t{}\t\t{}\t{}\t\t{}\t{:?}", ent.src_addr.ip, ent.src_addr.port, ent.dst_addr.ip, ent.dst_addr.port, ent.state.read().unwrap()),
+                SocketEntry::Connection(ent) => format!("{sid:?}\t{}\t{}\t{}\t{}\t{:?}", ent.src_addr.ip, ent.src_addr.port, ent.dst_addr.ip, ent.dst_addr.port, ent.state.read().unwrap()),
                 SocketEntry::Listener(ent) => format!("{sid:?}\t*\t\t{}\t*\t\t*\t{:?}", ent.port, ent.state.read().unwrap())
             };
             println!("{}", to_print);

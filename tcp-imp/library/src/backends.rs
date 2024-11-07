@@ -1,8 +1,9 @@
 use crate::prelude::*;
 use crate::utils::*;
 use crate::vnode_traits::*;
-use crate::socket_manager::*;
-use crate::conn_socket::*;
+use crate::sockman_utils::*;
+use crate::socket_manager::SocketManager;
+use crate::conn_socket::ConnectionSocket;
 use crate::tcp_utils::*;
 
 //I'm thinking that initialize() will now return a Backend, so it'll need this
@@ -15,7 +16,6 @@ pub struct HostBackend {
     interface_reps: Arc<RwLock<InterfaceTable>>,
     forwarding_table: Arc<RwLock<ForwardingTable>>,
     pub socket_table: Arc<RwLock<SocketTable>>, //Just pub for REPL - once IpHandler is made by config this goes away
-    //sockman_sender: Sender<SockMand>,
     pub socket_manager: Arc<Mutex<SocketManager>>, //Just pub for REPL - once IpHandler is made by config this goes away
     local_ip: Ipv4Addr,
     ip_sender: Arc<Sender<PacketBasis>>
@@ -26,16 +26,14 @@ impl VnodeBackend for HostBackend {
     fn interface_reps_mut(&self) -> RwLockWriteGuard<InterfaceTable> { self.interface_reps.write().unwrap() }
     fn forwarding_table(&self) -> RwLockReadGuard<ForwardingTable> { self.forwarding_table.read().unwrap() }
     fn ip_sender(&self) -> &Sender<PacketBasis> { &self.ip_sender }
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
+    fn as_any(&self) -> &dyn std::any::Any { self }
 }
 
 impl HostBackend {
     pub fn new(interface_reps: Arc<RwLock<InterfaceTable>>, forwarding_table: Arc<RwLock<ForwardingTable>>, socket_table: Arc<RwLock<SocketTable>>, ip_sender: Sender<PacketBasis>) -> HostBackend {
-        let local_ip = interface_reps.read().unwrap().get("if0").expect("Assumed that if0 would exist").v_ip.clone();
+        let local_ip = interface_reps.read().unwrap().get("if0").expect("Assumed that if0 would exist").v_ip.clone(); //IDEALLY, THIS IS NOT DONE THIS WAY
         let ip_sender = Arc::new(ip_sender);
-        let socket_manager =  SocketManager::new(local_ip.clone(), Arc::clone(&socket_table), Arc::clone(&ip_sender));
+        let socket_manager =  SocketManager::new(Arc::clone(&socket_table), Arc::clone(&ip_sender));
         let socket_manager = Arc::new(Mutex::new(socket_manager));
         HostBackend { interface_reps, forwarding_table, socket_table, socket_manager, local_ip, ip_sender }
     }
@@ -54,11 +52,11 @@ impl HostBackend {
         let conn_dst_addr = TcpAddress::new(dst_vip, dst_port);
         let init_state = Arc::new(RwLock::new(TcpState::AwaitingRun));
         // TODO: REfactor after connectionsocket refactoring
-        let conn_sock = ConnectionSocket::new(init_state, conn_src_addr.clone(), conn_dst_addr.clone(), Arc::clone(&self.ip_sender));
-        let (conn_send, conn_recv) = channel::<SocketCmd>();
-        let pending_conn = PendingConn::new(conn_sock, conn_recv, conn_send);
+        let conn_sock = ConnectionSocket::new(init_state, conn_src_addr.clone(), conn_dst_addr.clone(), Arc::clone(&self.ip_sender), 0);
+        let pending_conn = PendingConn::new(conn_sock);
         let mut socket_table = self.socket_table_mut();
-        pending_conn.start(&mut socket_table);
+        let sock = pending_conn.start(&mut socket_table);
+        ConnectionSocket::first_syn(sock); //Sends SYN message to start handshaked
     }
     /// Generates a new unused TCP address on the local IP
     fn unused_tcp_addr(&self) -> TcpAddress {
@@ -101,9 +99,7 @@ impl VnodeBackend for RouterBackend {
     fn interface_reps_mut(&self) -> RwLockWriteGuard<InterfaceTable> { self.interface_reps.write().unwrap() }
     fn forwarding_table(&self) -> RwLockReadGuard<ForwardingTable> { self.forwarding_table.read().unwrap() }
     fn ip_sender(&self) -> &Sender<PacketBasis> { &self.ip_sender }
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
+    fn as_any(&self) -> &dyn std::any::Any { self }
 }
 
 impl RouterBackend {

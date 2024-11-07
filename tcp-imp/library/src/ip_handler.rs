@@ -1,7 +1,8 @@
 use crate::prelude::*;
 use crate::utils::*;
 use crate::tcp_utils::*;
-use crate::socket_manager::*;
+use crate::sockman_utils::*;
+use crate::socket_manager::SocketManager;
 use crate::conn_socket::*;
 
 pub struct IpHandler {
@@ -14,15 +15,17 @@ impl IpHandler {
         IpHandler { socket_table, socket_manager }
     }
     pub fn run(self, ip_recver: Receiver<Packet>) -> () {
-        let pack = ip_recver.recv().expect("Error receiving from IP Daemon");
-        match pack.header.protocol.0  {
-            0 => Self::handle_test_packet(pack),
-            6 => {
-                let stable_clone = Arc::clone(&self.socket_table);
-                let smanager_clone = Arc::clone(&self.socket_manager);
-                thread::spawn(move || Self::handle_tcp_packet(pack, stable_clone, smanager_clone));
+        loop {
+            let pack = ip_recver.recv().expect("Error receiving from IP Daemon");
+            match pack.header.protocol.0  {
+                0 => Self::handle_test_packet(pack),
+                6 => {
+                    let stable_clone = Arc::clone(&self.socket_table);
+                    let smanager_clone = Arc::clone(&self.socket_manager);
+                    thread::spawn(move || Self::handle_tcp_packet(pack, stable_clone, smanager_clone));
+                }
+                _ => println!("I don't know how to deal with packets of protocol number \"{}\"", pack.header.protocol.0)
             }
-            _ => println!("I don't know how to deal with packets of protocol number \"{}\"", pack.header.protocol.0)
         }
     }
     fn handle_tcp_packet(pack: Packet, socket_table: Arc<RwLock<SocketTable>>, socket_manager: Arc<Mutex<SocketManager>>) -> () {

@@ -12,3 +12,4 @@ pub use ipnet::Ipv4Net;
 pub use std::time::{Instant, Duration};
 pub use std::mem::drop;
 pub use rand::Rng;
+pub use circular_buffer::CircularBuffer;

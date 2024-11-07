@@ -20,8 +20,9 @@ impl VnodeIpDaemon for HostIpDaemon {
     fn forwarding_table_mut(&self) -> RwLockWriteGuard<ForwardingTable> { self.forwarding_table.write().unwrap() }
     fn backend_sender(&self) -> &Sender<Packet> { &self.backend_sender }
     // TODO: SHOULD TAKE OTHER PROTOCOLS
-    fn local_protocols(&self, protocol: IpNumber, _pack: Packet) -> () {
+    fn local_protocols(&self, protocol: IpNumber, pack: Packet) -> () {
         match protocol {
+            IpNumber(6) => { self.backend_sender.send(pack).expect("Channel fuckery"); }
             _ => panic!("Unsupported protocol received"),
         }
     }

@@ -19,6 +19,7 @@ pub mod utils; //pub for testing purposes - should change back on deployment
 mod rip_trait;
 mod tcp_utils;
 mod conn_socket;
+pub mod sockman_utils;
 pub mod ip_handler; //b/c right now REPL makes IpHandler, although ideally this is a config task
 pub mod vnode_traits;
 pub mod config;
