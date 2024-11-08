@@ -77,7 +77,7 @@ impl ConnectionSocket {
 
     pub fn handle_packet(slf: Arc<Mutex<Self>>, tpack: TcpPacket) {
         let mut slf = slf.lock().unwrap(); 
-        let (new_state, increment_ack) = {
+        let new_state = {
             let slf_state = slf.state.read().unwrap();
             let state = slf_state.clone();
             drop(slf_state);
@@ -88,31 +88,30 @@ impl ConnectionSocket {
                 _ => panic!("State not implemented!")
             }
         };
-        slf.ack_num += increment_ack;
-        println!("{}",slf.ack_num);
         let mut state = slf.state.write().unwrap();
         *state = new_state;
     }
-    fn process_syn_ack(&mut self, tpack: TcpPacket) -> (TcpState, u32) {
+    fn process_syn_ack(&mut self, tpack: TcpPacket) -> TcpState {
         if has_only_flags(&tpack.header, SYN | ACK) {
+            self.ack_num = tpack.header.sequence_number;
+            self.ack_num += 1; //A SYN was received
             self.build_and_send(Vec::new(), ACK).expect("Error sending TCP packet to IP Daemon");
-            let ack_num = tpack.header.sequence_number;
-            return (TcpState::Established, ack_num)
+            return TcpState::Established
         }
-        (TcpState::SynSent, 0)
+        TcpState::SynSent
     }
-    fn process_ack(&self, tpack: TcpPacket) -> (TcpState, u32) {
+    fn process_ack(&self, tpack: TcpPacket) ->TcpState {
         if has_only_flags(&tpack.header, ACK) {
             println!("Received final acknowledgement, TCP handshake successful!");
-            return (TcpState::Established, 0)
+            return TcpState::Established
         }
-        (TcpState::SynRecvd, 0)
+        TcpState::SynRecvd
     } 
-    fn established_handle(&self, _tpack: TcpPacket) -> (TcpState, u32) {
+    fn established_handle(&mut self, tpack: TcpPacket) -> TcpState {
+        self.ack_num += tpack.payload.len() as u32;
         println!("I got a packet wee!!!");
-        (TcpState::Established, 0)
+        TcpState::Established
     }
-
 
     //
     //BUILDING AND SENDING PACKETS
@@ -135,7 +134,6 @@ impl ConnectionSocket {
             self.seq_num.clone(),
             self.win_size.clone()
         );
-        //update SYN value
         tcp_header.acknowledgment_number = self.ack_num.clone();
         ConnectionSocket::set_flags(&mut tcp_header, flags);
         let src_ip = self.src_addr.ip.clone().octets();
