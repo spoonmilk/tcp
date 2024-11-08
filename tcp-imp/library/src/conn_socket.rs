@@ -13,7 +13,7 @@ pub struct ConnectionSocket {
     ack_num: u32,
     win_size: u16,
     read_buf: Arc<Mutex<CircularBuffer::<65536, u8>>>,
-    write_buf: Arc<Mutex<CircularBuffer::<65536, u8>>>
+    write_buf: Arc<Mutex<Snd>>
 }
 
 //TODO: deal with handshake timeouts
@@ -27,13 +27,12 @@ impl ConnectionSocket {
 
     //SEND AND RECEIVE
     
-    //Loops through sending packets of max size 1500 bytes until everything's been sent 
-    /* 
+    //Loops through sending packets of max size 1500 bytes until everything's been sent  
     pub fn send(slf: Arc<Mutex<Self>>, to_send: Vec<u8>) -> u16 {
         //Spawn send_onwards thread
         let buf_update = Arc::new(Condvar::new());
-        let thread_slf = Arc::clone(&slf);
         let thread_buf_update = Arc::clone(&buf_update);
+        let thread_slf = Arc::clone(&slf);
         thread::spawn(move || Self::send_onwards(thread_slf, thread_buf_update));
         //Continuously wait for there to be space in the buffer and add data till buffer is full
         while to_send.len() > 0 {
@@ -47,9 +46,9 @@ impl ConnectionSocket {
         //slf.build_and_send(Vec::new(), ACK);
         0
     }
-    fn send_onwards(slf: Arc<Mutex<Self>>, buf_update: Arc<Condvar>) -> () {
+    fn send_onwards(slf: Arc<Mutex<Self>>, buf_update: Arc<Condvar>, sbuf: Arc<Mutex<SendBuf>>) -> () {
 
-    }*/
+    }
     /*
     pub fn recv(slf: Arc<Mutex<Self>>, bytes: u16) -> (u16, Vec<u8>) {
         //Pulls up to bytes data out of recv buffer and returns amount of bytes read plus the data as a string
@@ -171,4 +170,70 @@ impl ConnectionSocket {
             msg: serialize_tcp(tpack)
         }
     }
+}
+
+const MAX_MSG_SIZE: usize = 1500;
+const BUFFER_CAPACITY: usize = 65536;
+
+struct Snd {
+    spc_available: Condvar,
+    sbuf: Mutex<SendBuf>
+}
+
+impl Snd {
+    fn new(window_size: u16) -> Snd {
+        Snd { spc_available: Condvar::new(), sbuf: Mutex::new(SendBuf::new(window_size)) }
+    }
+    fn alert_space_available(&self) { self.spc_available.notify_one(); }
+    fn wait_space_available(&self) -> std::sync::MutexGuard<SendBuf> {
+        let mut sbuf = self.sbuf.lock().unwrap();
+        while sbuf.is_full() {
+            sbuf = self.spc_available.wait(sbuf).unwrap();
+        }
+        sbuf
+    }
+}
+
+struct SendBuf {
+    circ_buffer: CircularBuffer<BUFFER_CAPACITY, u8>,
+    //una: usize, Don't need, b/c una will always be 0 technically
+    nxt: usize,
+    //lbw: usize Don't need b/c lbw will always be circ_buffer.len() technically
+    rem_window: u16,
+    num_acked: u32
+}
+
+impl SendBuf {
+    fn new(window_size: u16) -> SendBuf {
+        SendBuf { circ_buffer: CircularBuffer::<BUFFER_CAPACITY, u8>::new(), nxt: 0, rem_window: window_size, num_acked: 0 }
+    }
+    ///Fills up the circular buffer with the data in filler until the buffer is full, 
+    ///then returns the original input filler vector drained of the values added to the circular buffer
+    fn fill_with(&mut self, mut filler: Vec<u8>) -> Vec<u8> {
+        let available_spc = self.circ_buffer.capacity() - self.nxt;
+        let to_add = filler.drain(..available_spc).collect::<Vec<u8>>();
+        self.circ_buffer.extend_from_slice(&to_add[..]);
+        filler
+    }
+    ///Returns a vector of data to be put in the next TcpPacket to send, taking into account the input window size of the receiver
+    ///This vector contains as many bytes as possible up to the maximum payload size (1500)
+    fn next_data(&mut self) -> Vec<u8> {
+        //Takes into account the three constraints on how much data can be sent in the next TcpPacket (window size, maximum message size, and amount of data in the buffer)
+        //and finds the appropriate
+        let constraints = vec![self.rem_window as usize, self.circ_buffer.len() - self.nxt, MAX_MSG_SIZE];
+        let greatest_constraint = constraints.iter().min().unwrap().clone(); 
+        let upper_bound = self.nxt + greatest_constraint;
+        let data = self.circ_buffer.drain(self.nxt..upper_bound).collect();
+        self.nxt = upper_bound;
+        data
+    }
+    //Acknowledges (drops) all sent bytes up to the one indicated by most_recent_ack
+    fn ack_data(&mut self, most_recent_ack: u32) {
+        let relative_ack = most_recent_ack - self.num_acked - 1;
+        self.circ_buffer.drain(..relative_ack as usize);
+        self.num_acked += relative_ack;
+    }
+    ///Updates the SendBuf's internal tracker of how many more bytes can be sent before filling the reciever's window
+    fn update_window(&mut self, new_window: u16) { self.rem_window = new_window }
+    fn is_full(&self) -> bool { self.circ_buffer.len() - self.circ_buffer.capacity() == 0 }
 }
