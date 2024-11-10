@@ -13,7 +13,7 @@ pub struct ConnectionSocket {
     ack_num: u32,
     win_size: u16,
     read_buf: Arc<Mutex<CircularBuffer::<65536, u8>>>,
-    write_buf: Arc<Mutex<Snd>>
+    writer: Arc<Mutex<Snd>>
 }
 
 //TODO: deal with handshake timeouts
@@ -22,33 +22,9 @@ impl ConnectionSocket {
     pub fn new(state: Arc<RwLock<TcpState>>, src_addr: TcpAddress, dst_addr: TcpAddress, ip_sender: Arc<Sender<PacketBasis>>, ack_num: u32) -> ConnectionSocket {
         let mut rand_rng = rand::thread_rng();
         let seq_num = rand_rng.gen::<u32>()/2;
-        ConnectionSocket { state, src_addr, dst_addr, seq_num, ip_sender, ack_num, win_size: 5000, read_buf: Arc::new(Mutex::new(CircularBuffer::<65536, u8>::new())), write_buf: Arc::new(Mutex::new(CircularBuffer::<65536, u8>::new())) }
+        ConnectionSocket { state, src_addr, dst_addr, seq_num, ip_sender, ack_num, win_size: 5000, read_buf: Arc::new(Mutex::new(CircularBuffer::<65536, u8>::new())), writer: Arc::new(Mutex::new(Snd::new(5000))) }
     } 
 
-    //SEND AND RECEIVE
-    
-    //Loops through sending packets of max size 1500 bytes until everything's been sent  
-    pub fn send(slf: Arc<Mutex<Self>>, to_send: Vec<u8>) -> u16 {
-        //Spawn send_onwards thread
-        let buf_update = Arc::new(Condvar::new());
-        let thread_buf_update = Arc::clone(&buf_update);
-        let thread_slf = Arc::clone(&slf);
-        thread::spawn(move || Self::send_onwards(thread_slf, thread_buf_update));
-        //Continuously wait for there to be space in the buffer and add data till buffer is full
-        while to_send.len() > 0 {
-            //Wait till send_onwards says you can access slf now
-            let mut slf = slf.lock().unwrap();
-            slf = buf_update.wait(slf).unwrap();
-            //Add data till write buffer is full
-            let write_buf = slf.write
-            let bytes_to_add = slf.write_buf.len()
-        }
-        //slf.build_and_send(Vec::new(), ACK);
-        0
-    }
-    fn send_onwards(slf: Arc<Mutex<Self>>, buf_update: Arc<Condvar>, sbuf: Arc<Mutex<SendBuf>>) -> () {
-
-    }
     /*
     pub fn recv(slf: Arc<Mutex<Self>>, bytes: u16) -> (u16, Vec<u8>) {
         //Pulls up to bytes data out of recv buffer and returns amount of bytes read plus the data as a string
@@ -170,11 +146,61 @@ impl ConnectionSocket {
             msg: serialize_tcp(tpack)
         }
     }
+ //SEND AND RECEIVE
+    
+    //Loops through sending packets of max size 1500 bytes until everything's been sent  
+    pub fn send(slf: Arc<Mutex<Self>>, mut to_send: Vec<u8>) -> u16 {
+        //Spawn send_onwards thread
+        let buf_update = Arc::new(Condvar::new());
+        let thread_buf_update = Arc::clone(&buf_update);
+        let thread_slf = Arc::clone(&slf);
+        thread::spawn(move || Self::send_onwards(thread_slf, thread_buf_update));
+        //Continuously wait for there to be space in the buffer and add data till buffer is full
+        while to_send.len() > 0 {
+            //Wait till send_onwards says you can access slf now
+            let mut slf = slf.lock().unwrap();
+            slf = buf_update.wait(slf).unwrap();
+            //Add data till write buffer is full
+            let writer = slf.writer.lock().unwrap();
+            let mut write_buf = writer.sbuf.lock().unwrap(); 
+            to_send = write_buf.fill_with(to_send);
+        }
+       //  slf.build_and_send(Vec::new(), ACK);
+        0
+    }
+    fn send_onwards(slf: Arc<Mutex<Self>>, buf_update: Arc<Condvar>) -> () {
+        // loop {
+        //     // Lock the connection socket
+        //     let mut slf = slf.lock().unwrap();
+
+        //     // Lock the writer and its send buffer
+        //     let mut writer = slf.writer.lock().unwrap();
+        //     let mut write_buf = writer.sbuf.lock().unwrap();
+
+        //     // Get the next data to send
+        //     let to_send = write_buf.next_data();
+        //     // Check if there is data to send
+        //     if !to_send.is_empty() {
+        //         // Move the call to build_and_send inside the scope of the writer lock
+        //         slf.build_and_send(to_send, 0).expect("Error sending to IpDaemon");
+                
+        //         // Notify that space is available in the buffer
+        //         writer.alert_space_available();
+        //         buf_update.notify_one();
+        //     } else {
+        //         // If there is no data to send, wait for space to become available
+        //         drop(writer); // Drop the writer lock before waiting
+        //         writer.wait_space_available();
+        //     }
+        // }
+    }
+    
 }
 
 const MAX_MSG_SIZE: usize = 1500;
 const BUFFER_CAPACITY: usize = 65536;
 
+#[derive(Debug)]
 struct Snd {
     spc_available: Condvar,
     sbuf: Mutex<SendBuf>
@@ -184,8 +210,9 @@ impl Snd {
     fn new(window_size: u16) -> Snd {
         Snd { spc_available: Condvar::new(), sbuf: Mutex::new(SendBuf::new(window_size)) }
     }
-    fn alert_space_available(&self) { self.spc_available.notify_one(); }
-    fn wait_space_available(&self) -> std::sync::MutexGuard<SendBuf> {
+    // Are these just unused b.c. we're passing in condvars?
+    fn alert_space_available(&mut self) { self.spc_available.notify_one(); }
+    fn wait_space_available(&mut self) -> std::sync::MutexGuard<SendBuf> {
         let mut sbuf = self.sbuf.lock().unwrap();
         while sbuf.is_full() {
             sbuf = self.spc_available.wait(sbuf).unwrap();
@@ -194,6 +221,7 @@ impl Snd {
     }
 }
 
+#[derive(Debug)]
 struct SendBuf {
     circ_buffer: CircularBuffer<BUFFER_CAPACITY, u8>,
     //una: usize, Don't need, b/c una will always be 0 technically
@@ -235,5 +263,5 @@ impl SendBuf {
     }
     ///Updates the SendBuf's internal tracker of how many more bytes can be sent before filling the reciever's window
     fn update_window(&mut self, new_window: u16) { self.rem_window = new_window }
-    fn is_full(&self) -> bool { self.circ_buffer.len() - self.circ_buffer.capacity() == 0 }
+    fn is_full(&self) -> bool { self.circ_buffer.capacity() - self.circ_buffer.len() == 0 }
 }
