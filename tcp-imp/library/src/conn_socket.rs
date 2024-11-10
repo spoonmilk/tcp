@@ -193,6 +193,42 @@ impl ConnectionSocket {
         //         writer.wait_space_available();
         //     }
         // }
+
+
+        loop {
+            // Acquire a lock on `slf`
+            let mut slf = slf.lock().unwrap();
+    
+                        // Retrieve the next chunk of data to send
+            let to_send = {
+                let writer = slf.writer.lock().unwrap();
+                let mut write_buf = writer.sbuf.lock().unwrap();
+                write_buf.next_data()
+            };
+    
+            // Check if there is data to send
+            if to_send.is_empty() {
+                // If there's no data, wait until space becomes available
+                {
+                    let writer = slf.writer.lock().unwrap();
+                    let _unused = writer.wait_space_available();
+                }
+                continue;
+            }
+    
+            // Send data over the network
+            if let Err(e) = slf.build_and_send(to_send, 0) {
+                eprintln!("Error sending data: {}", e);
+                break; // Exit the loop if there's an error
+            }
+    
+            // Notify any waiting threads that space is now available in the buffer
+            let writer = slf.writer.lock().unwrap();
+            writer.alert_space_available();
+            buf_update.notify_all();
+            // Simulate acknowledgment by sleeping for a bit (you can replace this with actual ACK handling)
+            thread::sleep(Duration::from_millis(50));
+        }
     }
     
 }
@@ -211,8 +247,8 @@ impl Snd {
         Snd { spc_available: Condvar::new(), sbuf: Mutex::new(SendBuf::new(window_size)) }
     }
     // Are these just unused b.c. we're passing in condvars?
-    fn alert_space_available(&mut self) { self.spc_available.notify_one(); }
-    fn wait_space_available(&mut self) -> std::sync::MutexGuard<SendBuf> {
+    fn alert_space_available(&self) { self.spc_available.notify_one(); }
+    fn wait_space_available(&self) -> std::sync::MutexGuard<SendBuf> {
         let mut sbuf = self.sbuf.lock().unwrap();
         while sbuf.is_full() {
             sbuf = self.spc_available.wait(sbuf).unwrap();
