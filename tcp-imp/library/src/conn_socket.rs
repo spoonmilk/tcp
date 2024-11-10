@@ -13,7 +13,7 @@ pub struct ConnectionSocket {
     ack_num: u32,
     win_size: u16,
     read_buf: Arc<Mutex<CircularBuffer::<65536, u8>>>,
-    writer: Arc<Mutex<Snd>>
+    write_buf: Arc<Mutex<SyncBuf<SendBuf>>>
 }
 
 //TODO: deal with handshake timeouts
@@ -193,67 +193,33 @@ impl ConnectionSocket {
         //         writer.wait_space_available();
         //     }
         // }
-
-
-        loop {
-            // Acquire a lock on `slf`
-            let mut slf = slf.lock().unwrap();
-    
-                        // Retrieve the next chunk of data to send
-            let to_send = {
-                let writer = slf.writer.lock().unwrap();
-                let mut write_buf = writer.sbuf.lock().unwrap();
-                write_buf.next_data()
-            };
-    
-            // Check if there is data to send
-            if to_send.is_empty() {
-                // If there's no data, wait until space becomes available
-                {
-                    let writer = slf.writer.lock().unwrap();
-                    let _unused = writer.wait_space_available();
-                }
-                continue;
-            }
-    
-            // Send data over the network
-            if let Err(e) = slf.build_and_send(to_send, 0) {
-                eprintln!("Error sending data: {}", e);
-                break; // Exit the loop if there's an error
-            }
-    
-            // Notify any waiting threads that space is now available in the buffer
-            let writer = slf.writer.lock().unwrap();
-            writer.alert_space_available();
-            buf_update.notify_all();
-            // Simulate acknowledgment by sleeping for a bit (you can replace this with actual ACK handling)
-            thread::sleep(Duration::from_millis(50));
-        }
     }
     
 }
+
+//
+//SEND AND RECV BUFFERS
+//
 
 const MAX_MSG_SIZE: usize = 1500;
 const BUFFER_CAPACITY: usize = 65536;
 
-#[derive(Debug)]
-struct Snd {
-    spc_available: Condvar,
-    sbuf: Mutex<SendBuf>
+struct SyncBuf<T: TcpBuffer> {
+    ready: Condvar,
+    buf: Mutex<T>
 }
 
-impl Snd {
-    fn new(window_size: u16) -> Snd {
-        Snd { spc_available: Condvar::new(), sbuf: Mutex::new(SendBuf::new(window_size)) }
+impl<T: TcpBuffer> SyncBuf<T> {
+    fn new(buf: T) -> SyncBuf<T> {
+        SyncBuf { ready: Condvar::new(), buf: Mutex::new(buf) }
     }
-    // Are these just unused b.c. we're passing in condvars?
-    fn alert_space_available(&self) { self.spc_available.notify_one(); }
-    fn wait_space_available(&self) -> std::sync::MutexGuard<SendBuf> {
-        let mut sbuf = self.sbuf.lock().unwrap();
-        while sbuf.is_full() {
-            sbuf = self.spc_available.wait(sbuf).unwrap();
+    fn alert_ready(&self) { self.ready.notify_one(); }
+    fn wait(&self) -> std::sync::MutexGuard<T> {
+        let mut buf = self.buf.lock().unwrap();
+        while !buf.ready() {
+            buf = self.ready.wait(buf).unwrap();
         }
-        sbuf
+        buf
     }
 }
 
@@ -267,9 +233,18 @@ struct SendBuf {
     num_acked: u32
 }
 
+impl TcpBuffer for SendBuf {
+    //Ready when buffer is not full
+    fn ready(&self) -> bool { self.circ_buffer.len() != self.circ_buffer.capacity() }
+}
+
+trait TcpBuffer {
+    fn ready(&self) -> bool;
+}
+
 impl SendBuf {
     fn new(window_size: u16) -> SendBuf {
-        SendBuf { circ_buffer: CircularBuffer::<BUFFER_CAPACITY, u8>::new(), nxt: 0, rem_window: window_size, num_acked: 0 }
+        SendBuf { circ_buffer: CircularBuffer::new(), nxt: 0, rem_window: window_size, num_acked: 0 }
     }
     ///Fills up the circular buffer with the data in filler until the buffer is full, 
     ///then returns the original input filler vector drained of the values added to the circular buffer
@@ -285,9 +260,9 @@ impl SendBuf {
         //Takes into account the three constraints on how much data can be sent in the next TcpPacket (window size, maximum message size, and amount of data in the buffer)
         //and finds the appropriate
         let constraints = vec![self.rem_window as usize, self.circ_buffer.len() - self.nxt, MAX_MSG_SIZE];
-        let greatest_constraint = constraints.iter().min().unwrap().clone(); 
+        let greatest_constraint = constraints.iter().min().unwrap(); 
         let upper_bound = self.nxt + greatest_constraint;
-        let data = self.circ_buffer.drain(self.nxt..upper_bound).collect();
+        let data = self.circ_buffer.range(self.nxt..upper_bound).cloned().collect();
         self.nxt = upper_bound;
         data
     }
@@ -299,5 +274,50 @@ impl SendBuf {
     }
     ///Updates the SendBuf's internal tracker of how many more bytes can be sent before filling the reciever's window
     fn update_window(&mut self, new_window: u16) { self.rem_window = new_window }
-    fn is_full(&self) -> bool { self.circ_buffer.capacity() - self.circ_buffer.len() == 0 }
+    fn is_full(&self) -> bool { self.circ_buffer.len() - self.circ_buffer.capacity() == 0 }
+}
+
+#[derive(Debug)]
+struct RecvBuf {
+    circ_buffer: CircularBuffer<BUFFER_CAPACITY, u8>,
+    //lbr: usize Don't need, lbr will always be 0
+    //nxt: usize Don't need, nxt will always be circ_buffer.len()
+    early_arrivals: HashMap<u32, Vec<u8>>,
+    bytes_read: u32
+}
+
+impl TcpBuffer for RecvBuf {
+    fn ready(&self) -> bool { self.circ_buffer.len() != 0 }
+}
+
+impl RecvBuf {
+    pub fn new() -> RecvBuf {
+        RecvBuf { circ_buffer: CircularBuffer::new(), early_arrivals: HashMap::new(), bytes_read: 0 }
+    }
+    ///Returns a vector of in-order data drained from the circular buffer, containing a number of elements equal to the specified amount
+    ///or to the total amount of in-order data ready to go in the buffer
+    pub fn read(&mut self, bytes: u16) -> Vec<u8> {
+        let constraints = vec![bytes as usize, self.circ_buffer.len()];
+        let greatest_constraint = constraints.iter().min().unwrap();
+        self.circ_buffer.drain(..greatest_constraint).collect()
+    }
+    ///Adds the input data segment to the buffer if its sequence number is the next expected one. If not, inserts the segment into the
+    ///early arrival hashmap. If data is ever added to the buffer, the early arrivals hashmap is checked to see if it contains the
+    ///following expected segment, and the cycle continues until there are no more segments to add to the buffer
+    ///Returns the next expected sequence number (the new ack number)
+    pub fn add(&mut self, seq_num: u32, data: Vec<u8>) -> u32 {
+        if seq_num == self.expected_seq() {
+            self.circ_buffer.extend_from_slice(&data[..]);
+            while let Some(next_data) = self.early_arrivals.remove(&self.expected_seq()) {
+                self.circ_buffer.extend_from_slice(&next_data[..]);
+            }
+        } else {
+            self.early_arrivals.insert(seq_num, data);
+        }
+        self.expected_seq()
+    }
+    ///Returns the next expected sequence number - only used privately, self.add() returns next sequence number too for public use
+    fn expected_seq(&self) -> u32 { self.bytes_read + (self.circ_buffer.len() + 1) as u32 }
+    ///Returns the buffer's current window size
+    pub fn window(&self) -> u16 { (self.circ_buffer.capacity() - self.circ_buffer.len()) as u16 }
 }
