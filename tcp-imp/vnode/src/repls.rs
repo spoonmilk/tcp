@@ -25,6 +25,8 @@ impl VnodeRepl<HostBackend> for HostRepl {
             ("a".to_string(), CommandData { handler: Self::wrap_host_handler(Self::a_handler), num_args: NumArgs::Exactly(1) }), 
             ("c".to_string(), CommandData { handler: Self::wrap_host_handler(Self::c_handler), num_args: NumArgs::Exactly(2) }), 
             ("ls".to_string(), CommandData { handler: Self::wrap_host_handler(Self::ls_handler), num_args: NumArgs::Exactly(0) }),
+            ("s".to_string(), CommandData { handler: Self::wrap_host_handler(Self::s_handler), num_args: NumArgs::Exactly(2) }), 
+            ("r".to_string(), CommandData { handler: Self::wrap_host_handler(Self::r_handler), num_args: NumArgs::Exactly(2) }),
         ];
         let mut all_commands = self.get_base_commands();
         all_commands.append(&mut custom_commands);
@@ -72,7 +74,32 @@ impl HostRepl {
             println!("{}", to_print);
         }
     }
-
+    pub fn s_handler(backend: &HostBackend, args: Vec<String>) -> () {
+        //Sanitize input
+        let sid = if let Ok(sid) = args[0].parse::<SocketId>() { sid } else { return println!("Input socket ID {} invalid", args[0]) };
+        let data = if let Ok(data) = args[1].parse::<Vec<u8>>() { data } else { return println!("Input message unparsable to bytes???", args[1]) };
+        //Send data and print result
+        match backend.tcp_send(sid, data) {
+            Ok(bytes_sent) => println!("Sent {bytes_sent} bytes"),
+            Err(e) => println!("{}", e.to_string())
+        }
+    }
+    pub fn r_handler(backend: &HostBackend, args: Vec<String>) -> () {
+        //Sanitize input
+        let sid = if let Ok(sid) = args[0].parse::<SocketId>() { sid } else { return println!("Input socket ID {} invalid", args[0]) };
+        let bytes = if let Ok(bytes) = args[1].parse::<u16>() { bytes } else { return println!("Input number of bytes to read {} cannot parse to u16 - make sure it's less than 2^16", args[1]) };
+        //Receive data and parse to string, printing the results
+        match backend.tcp_recieve(sid, bytes) {
+            Ok(data) => {
+                let msg = match String::from_utf8(data) {
+                    Ok(msg) => msg,
+                    Err(_) => println!("Received non utf8 encoded data :(")
+                };
+                println!("Received {} bytes. As a string, they are:\n{}", msg.len(), msg)
+            },
+            Err(e) => println!("{}", e.to_string())
+        }
+    }
     fn wrap_host_handler<F>(f: F) -> CommandHandler
     where
         F: Fn(&HostBackend, Vec<String>) + 'static,

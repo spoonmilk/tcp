@@ -84,7 +84,7 @@ pub const SYN: u8 = 16;
 pub const FIN: u8 = 32;
 
 /// Takes a TCP header and returns the flags as a u8
-fn header_flags(head: &TcpHeader) -> u8 {
+pub fn header_flags(head: &TcpHeader) -> u8 {
     let bools = [false, false, head.fin, head.syn, head.rst, head.psh, head.ack, head.urg];
     bools.iter()
         .enumerate()
