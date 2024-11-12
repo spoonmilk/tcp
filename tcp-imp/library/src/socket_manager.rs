@@ -65,7 +65,7 @@ impl SocketManager {
         let src_addr = TcpAddress::new(Ipv4Addr::from(ip_head.destination), tcp_pack.header.destination_port);
         let dst_addr = TcpAddress::new(Ipv4Addr::from(ip_head.source), tcp_pack.header.source_port);
         let ack_num = tcp_pack.header.sequence_number;
-        let state = Arc::new(RwLock::new(TcpState::SynRecvd)); //Always start in syn recved state when spawned by listener socket
+        let state = Arc::new(RwLock::new(TcpState::SynRecvd)); //Always start in syn recved state when spawned by listener socket 
         
         // Clone arc of ip_sender, create new connection socket
         let ip_send = self.ip_sender.clone();
@@ -77,7 +77,7 @@ impl SocketManager {
         match listener.accepting {
             true => {
                 let sock = pending_conn.start(&mut sock_table); //Technically, if we wanted to be fully faithful to a true socket API, we would set accepting back to false here, but this doesn't actually need to happen, so...
-                ConnectionSocket::first_syn_ack(sock); //Sends SYN + ACK message
+                ConnectionSocket::first_syn_ack(sock, tcp_pack); //Sends SYN + ACK message
             }
             false => listener.pending_connections.push(pending_conn)
         }

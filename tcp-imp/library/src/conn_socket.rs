@@ -13,7 +13,7 @@ pub struct ConnectionSocket {
     ack_num: u32,
     win_size: u16,
     read_buf: Arc<SyncBuf<RecvBuf>>,
-    write_buf: Arc<SyncBuf<SendBuf>>
+    write_buf: Arc<SyncBuf<SendBuf>>,
 }
 
 //TODO: deal with handshake timeouts
@@ -26,9 +26,19 @@ impl ConnectionSocket {
         ack_num: u32
     ) -> ConnectionSocket {
         let mut rand_rng = rand::thread_rng();
-        let seq_num = rand_rng.gen::<u32>()/2;
-        ConnectionSocket { state, src_addr, dst_addr, seq_num, ip_sender, ack_num, win_size: 5000, read_buf: Arc::new(SyncBuf::new(RecvBuf::new())), write_buf: Arc::new(SyncBuf::new(SendBuf::new())) }
-    } 
+        let seq_num = rand_rng.gen::<u32>() / 2;
+        ConnectionSocket {
+            state,
+            src_addr,
+            dst_addr,
+            seq_num,
+            ip_sender,
+            ack_num,
+            win_size: 5000,
+            read_buf: Arc::new(SyncBuf::new(RecvBuf::new())),
+            write_buf: Arc::new(SyncBuf::new(SendBuf::new())),
+        }
+    }
 
     /*
     pub fn recv(slf: Arc<Mutex<Self>>, bytes: u16) -> (u16, Vec<u8>) {
@@ -43,11 +53,18 @@ impl ConnectionSocket {
         let mut state = slf.state.write().unwrap();
         *state = TcpState::SynSent;
     }
-    pub fn first_syn_ack(slf: Arc<Mutex<Self>>) {
+    pub fn first_syn_ack(slf: Arc<Mutex<Self>>, t_pack: TcpPacket) {
         let mut slf = slf.lock().unwrap();
         slf.ack_num += 1;
         slf.build_and_send(Vec::new(), SYN | ACK).expect("Error sending to IpDaemon");
         let mut state = slf.state.write().unwrap();
+        
+        // Initializing send and receive buffers
+        let mut send_buf = slf.write_buf.get_buf();
+        send_buf.update_window(t_pack.header.window_size); 
+        let mut recv_buf = slf.read_buf.get_buf(); 
+        recv_buf.set_seq(t_pack.header.sequence_number);
+        
         *state = TcpState::SynRecvd;
     }
 
@@ -75,6 +92,8 @@ impl ConnectionSocket {
             self.ack_num = tpack.header.sequence_number;
             self.ack_num += 1; //A SYN was received
             self.build_and_send(Vec::new(), ACK).expect("Error sending TCP packet to IP Daemon");
+            let mut send_buf = self.write_buf.get_buf();
+            send_buf.update_window(tpack.header.window_size);
             return TcpState::Established;
         }
         TcpState::SynSent
@@ -88,18 +107,28 @@ impl ConnectionSocket {
     }
     fn established_handle(&mut self, tpack: TcpPacket) -> TcpState {
         match header_flags(&tpack.header) {
-            ACK if tpack.payload.len() == 0 => { //Received an acknowledgement of data sent
+            ACK if tpack.payload.len() == 0 => {
+                //Received an acknowledgement of data sent
                 let mut send_buf = self.write_buf.get_buf();
                 send_buf.ack_data(tpack.header.acknowledgment_number);
-            },
-            ACK => { //Received data
+            }
+            ACK => {
+                println!("Received an ACK with a payload!");
+                //Received data
                 let mut recv_buf = self.read_buf.get_buf();
+                println!("Received packet with payload: {:?}", tpack.payload);
                 self.ack_num = recv_buf.add(tpack.header.sequence_number, tpack.payload);
                 self.win_size = recv_buf.window();
+                println!("Should alert now");
+                println!("is ready: {}", recv_buf.ready());
                 self.read_buf.alert_ready();
-            },
-            FIN => {}, //Other dude wants to close the connection
-            _ => eprintln!("I got no clue how to deal with a packet that has flags: {}", header_flags(&tpack.header))
+            }
+            FIN => {} //Other dude wants to close the connection
+            _ =>
+                eprintln!(
+                    "I got no clue how to deal with a packet that has flags: {}",
+                    header_flags(&tpack.header)
+                ),
         }
         println!("I got a packet wee!!!");
         TcpState::Established
@@ -175,6 +204,8 @@ impl ConnectionSocket {
 
     //Loops through sending packets of max size 1500 bytes until everything's been sent
     pub fn send(slf: Arc<Mutex<Self>>, mut to_send: Vec<u8>) -> u16 {
+        println!("Send initiated. Spawning things!");
+
         //Spawn send_onwards thread
         let buf_update = Arc::new(Condvar::new());
 
@@ -184,36 +215,40 @@ impl ConnectionSocket {
 
         //Continuously wait for there to be space in the buffer and add data till buffer is full
         while !to_send.is_empty() {
+            println!("Adding data to buffer");
             //Wait till send_onwards says you can access slf now
             let slf = slf.lock().unwrap();
-
-            let writer = slf.write_buf.lock().unwrap();
-            let mut write_buf = writer.buf.lock().unwrap();
-            to_send = write_buf.fill_with(to_send);
-
+            let mut writer = slf.write_buf.wait();
+            to_send = writer.fill_with(to_send);
             // Notify send_onwards of buffer update
             buf_update.notify_one();
         }
         //  slf.build_and_send(Vec::new(), ACK);
         0
     }
-
     fn send_onwards(slf: Arc<Mutex<Self>>, buf_update: Arc<Condvar>) -> () {
         loop {
             // Acquire a lock on `slf`
             let mut slf = slf.lock().unwrap();
 
             // Retrieve the next chunk of data to send
-            let to_send = {
-                let writer = slf.write_buf.lock().unwrap();
-                let mut write_buf = writer.buf.lock().unwrap();
-                // Wait for a buffer update notification from send
-                write_buf = buf_update.wait(write_buf).unwrap();
-                write_buf.next_data()
+            let mut to_send: Vec<u8> = {
+                let mut writer = slf.write_buf.buf.lock().unwrap();
+                writer.next_data()
             };
 
+            if to_send.is_empty() {
+                {
+                    println!("Data is empty :(, waiting to refill");
+                    let mut writer = slf.write_buf.buf.lock().unwrap();
+                    writer = buf_update.wait(writer).unwrap();
+                    to_send = writer.next_data();
+                }
+            }
+            println!("Received data to send: {}", String::from_utf8_lossy(&to_send));
+
             // Send data over the network
-            if let Err(e) = slf.build_and_send(to_send, 0) {
+            if let Err(e) = slf.build_and_send(to_send, ACK) {
                 eprintln!("Error sending data: {}", e);
                 break; // Exit the loop if there's an error
             }
@@ -223,18 +258,19 @@ impl ConnectionSocket {
     pub fn receive(slf: Arc<Mutex<Self>>, bytes: u16) -> Vec<u8> {
         let mut received = Vec::new();
         let read_buf = {
-            let slf  = slf.lock().unwrap();
+            let slf = slf.lock().unwrap();
             Arc::clone(&slf.read_buf)
         };
-        loop  {
-            let remaining_amt = bytes - received.len() as u16;
-            if remaining_amt == 0 { break received }
+        loop {
+            let remaining_amt = bytes - (received.len() as u16);
+            if remaining_amt == 0 {
+                break received;
+            }
             let mut recv_buf = read_buf.wait();
             let just_received = recv_buf.read(remaining_amt);
             received.extend(just_received);
         }
     }
-    
 }
 
 //
@@ -242,7 +278,7 @@ impl ConnectionSocket {
 //
 
 const MAX_MSG_SIZE: usize = 1500;
-const BUFFER_CAPACITY: usize = 65536;
+const BUFFER_CAPACITY: usize = 65535;
 
 #[derive(Debug)]
 struct SyncBuf<T: TcpBuffer> {
@@ -254,7 +290,9 @@ impl<T: TcpBuffer> SyncBuf<T> {
     pub fn new(buf: T) -> SyncBuf<T> {
         SyncBuf { ready: Condvar::new(), buf: Mutex::new(buf) }
     }
-    pub fn alert_ready(&self) { self.ready.notify_one(); }
+    pub fn alert_ready(&self) {
+        self.ready.notify_one();
+    }
     pub fn wait(&self) -> std::sync::MutexGuard<T> {
         let mut buf = self.buf.lock().unwrap();
         while !buf.ready() {
@@ -262,7 +300,9 @@ impl<T: TcpBuffer> SyncBuf<T> {
         }
         buf
     }
-    pub fn get_buf(&self) -> std::sync::MutexGuard<T> { self.buf.lock().unwrap() }
+    pub fn get_buf(&self) -> std::sync::MutexGuard<T> {
+        self.buf.lock().unwrap()
+    }
 }
 
 trait TcpBuffer {
@@ -287,14 +327,18 @@ impl TcpBuffer for SendBuf {
 }
 
 impl SendBuf {
-    fn new() -> SendBuf { 
+    fn new() -> SendBuf {
         SendBuf { circ_buffer: CircularBuffer::new(), nxt: 0, rem_window: 0, num_acked: 0 }
     }
     ///Fills up the circular buffer with the data in filler until the buffer is full,
     ///then returns the original input filler vector drained of the values added to the circular buffer
     fn fill_with(&mut self, mut filler: Vec<u8>) -> Vec<u8> {
         let available_spc = self.circ_buffer.capacity() - self.nxt;
-        let to_add = filler.drain(..available_spc).collect::<Vec<u8>>();
+
+        let to_add = filler
+            .drain(..std::cmp::min(available_spc, filler.len()))
+            .collect::<Vec<u8>>();
+
         self.circ_buffer.extend_from_slice(&to_add[..]);
         filler
     }
@@ -310,11 +354,19 @@ impl SendBuf {
         ];
         let greatest_constraint = constraints.iter().min().unwrap();
         let upper_bound = self.nxt + greatest_constraint;
-        let data = self.circ_buffer
+        println!(
+            "nxt: {}, greatest constraint: {}, upper_bound: {}",
+            self.nxt,
+            greatest_constraint,
+            upper_bound
+        );
+        let data: Vec<u8> = self.circ_buffer
             .range(self.nxt..upper_bound)
             .cloned()
             .collect();
         self.nxt = upper_bound;
+        let print_data = data.clone();
+        println!("Data to send: {}", String::from_utf8_lossy(&print_data));
         data
     }
     //Acknowledges (drops) all sent bytes up to the one indicated by most_recent_ack
@@ -328,7 +380,7 @@ impl SendBuf {
         self.rem_window = new_window;
     }
     fn is_full(&self) -> bool {
-        self.circ_buffer.len() - self.circ_buffer.capacity() == 0
+        self.circ_buffer.capacity() - self.circ_buffer.len() == 0
     }
 }
 
@@ -339,11 +391,14 @@ struct RecvBuf {
     //nxt: usize Don't need, nxt will always be circ_buffer.len()
     early_arrivals: HashMap<u32, Vec<u8>>,
     bytes_read: u32,
+    ini_seq_num: u32,
 }
 
 impl TcpBuffer for RecvBuf {
     //Ready when buffer has some elements
-    fn ready(&self) -> bool { self.circ_buffer.len() != 0 }
+    fn ready(&self) -> bool {
+        self.circ_buffer.len() != 0
+    }
 }
 
 impl RecvBuf {
@@ -352,6 +407,7 @@ impl RecvBuf {
             circ_buffer: CircularBuffer::new(),
             early_arrivals: HashMap::new(),
             bytes_read: 0,
+            ini_seq_num: 0,
         }
     }
 
@@ -368,6 +424,7 @@ impl RecvBuf {
     ///following expected segment, and the cycle continues until there are no more segments to add to the buffer
     ///Returns the next expected sequence number (the new ack number)
     pub fn add(&mut self, seq_num: u32, data: Vec<u8>) -> u32 {
+        println!("sequence number: {}\nexpected sequence number: {}", seq_num, self.expected_seq());
         if seq_num == self.expected_seq() {
             self.circ_buffer.extend_from_slice(&data[..]);
             while let Some(next_data) = self.early_arrivals.remove(&self.expected_seq()) {
@@ -380,10 +437,14 @@ impl RecvBuf {
     }
     ///Returns the next expected sequence number - only used privately, self.add() returns next sequence number too for public use
     fn expected_seq(&self) -> u32 {
-        self.bytes_read + ((self.circ_buffer.len() + 1) as u32)
+        self.bytes_read + ((self.circ_buffer.len() + 1) as u32) + self.ini_seq_num
     }
     ///Returns the buffer's current window size
     pub fn window(&self) -> u16 {
         (self.circ_buffer.capacity() - self.circ_buffer.len()) as u16
+    }
+    
+    pub fn set_seq(&mut self, seq_num: u32) {
+        self.ini_seq_num = seq_num;
     }
 }

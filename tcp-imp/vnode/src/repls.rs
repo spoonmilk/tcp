@@ -77,7 +77,7 @@ impl HostRepl {
     pub fn s_handler(backend: &HostBackend, args: Vec<String>) -> () {
         //Sanitize input
         let sid = if let Ok(sid) = args[0].parse::<SocketId>() { sid } else { return println!("Input socket ID {} invalid", args[0]) };
-        let data = if let Ok(data) = args[1].parse::<Vec<u8>>() { data } else { return println!("Input message unparsable to bytes???", args[1]) };
+        let data = <String as Clone>::clone(&args[1]).into_bytes();
         //Send data and print result
         match backend.tcp_send(sid, data) {
             Ok(bytes_sent) => println!("Sent {bytes_sent} bytes"),
@@ -93,7 +93,7 @@ impl HostRepl {
             Ok(data) => {
                 let msg = match String::from_utf8(data) {
                     Ok(msg) => msg,
-                    Err(_) => println!("Received non utf8 encoded data :(")
+                    Err(_) => panic!("Received non utf8 encoded data :(")
                 };
                 println!("Received {} bytes. As a string, they are:\n{}", msg.len(), msg)
             },
