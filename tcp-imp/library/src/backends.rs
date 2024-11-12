@@ -38,7 +38,15 @@ impl HostBackend {
         HostBackend { interface_reps, forwarding_table, socket_table, socket_manager, local_ip, ip_sender }
     }
     pub fn socket_table(&self) -> RwLockReadGuard<SocketTable> { self.socket_table.read().unwrap() }
-    pub fn socket_table_mut(&self) -> RwLockWriteGuard<SocketTable> { self.socket_table.write().unwrap() }
+    fn socket_table_mut(&self) -> RwLockWriteGuard<SocketTable> { self.socket_table.write().unwrap() }
+    fn sock_arc(&self, sid: &SocketId) -> Option<Arc<Mutex<ConnectionSocket>>> {
+        let s_table = self.socket_table();
+        match s_table.get(&sid) {
+            Some(SocketEntry::Connection(s_ent)) => Some(Arc::clone(&s_ent.sock)),
+            Some(SocketEntry::Listener(_)) => None,
+            None => None
+        }
+    }
     pub fn listen(&self, port: u16) -> () { self.socket_manager.lock().unwrap().listen(port); }
     pub fn accept(&self, port: u16) -> () { self.socket_manager.lock().unwrap().accept(port); }
     pub fn connect(&self, ip_addr: Ipv4Addr, port: u16) -> () {
@@ -84,7 +92,22 @@ impl HostBackend {
         None
     }
     //More to come 
-    pub fn tcp_send(&self, pb: PacketBasis) -> () {} //COMING SOON
+    pub fn tcp_send(&self, sid: SocketId, data: Vec<u8>) -> Result<u16> {
+        let sock = match self.sock_arc(&sid) {
+            Some(sock) => sock,
+            None => return Err(Error::new(ErrorKind::InvalidInput, "Input socket ID does not match that of any connection sockets"))
+        };
+        let bytes_sent = ConnectionSocket::send(sock, data);
+        Ok(bytes_sent)
+    }
+    pub fn tcp_recieve(&self, sid: SocketId, bytes: u16) -> Result<Vec<u8>> {
+        let sock = match self.sock_arc(&sid) {
+            Some(sock) => sock,
+            None => return Err(Error::new(ErrorKind::InvalidInput, "Input socket ID does not match that of any connection sockets"))
+        };
+        let data = ConnectionSocket::receive(sock, bytes);
+        Ok(data)
+    }
 }
 
 pub struct RouterBackend {

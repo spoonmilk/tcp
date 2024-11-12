@@ -12,8 +12,8 @@ pub struct ConnectionSocket {
     seq_num: u32,
     ack_num: u32,
     win_size: u16,
-    read_buf: Arc<Mutex<CircularBuffer<65536, u8>>>,
-    write_buf: Arc<Mutex<SyncBuf<SendBuf>>>,
+    read_buf: Arc<SyncBuf<RecvBuf>>,
+    write_buf: Arc<SyncBuf<SendBuf>>
 }
 
 //TODO: deal with handshake timeouts
@@ -26,19 +26,9 @@ impl ConnectionSocket {
         ack_num: u32
     ) -> ConnectionSocket {
         let mut rand_rng = rand::thread_rng();
-        let seq_num = rand_rng.gen::<u32>() / 2;
-        ConnectionSocket {
-            state,
-            src_addr,
-            dst_addr,
-            seq_num,
-            ip_sender,
-            ack_num,
-            win_size: 5000,
-            read_buf: Arc::new(Mutex::new(CircularBuffer::<65536, u8>::new())),
-            write_buf: Arc::new(Mutex::new(SyncBuf::new(SendBuf::new(5000)))),
-        }
-    }
+        let seq_num = rand_rng.gen::<u32>()/2;
+        ConnectionSocket { state, src_addr, dst_addr, seq_num, ip_sender, ack_num, win_size: 5000, read_buf: Arc::new(SyncBuf::new(RecvBuf::new())), write_buf: Arc::new(SyncBuf::new(SendBuf::new())) }
+    } 
 
     /*
     pub fn recv(slf: Arc<Mutex<Self>>, bytes: u16) -> (u16, Vec<u8>) {
@@ -97,7 +87,20 @@ impl ConnectionSocket {
         TcpState::SynRecvd
     }
     fn established_handle(&mut self, tpack: TcpPacket) -> TcpState {
-        self.ack_num += tpack.payload.len() as u32;
+        match header_flags(&tpack.header) {
+            ACK if tpack.payload.len() == 0 => { //Received an acknowledgement of data sent
+                let mut send_buf = self.write_buf.get_buf();
+                send_buf.ack_data(tpack.header.acknowledgment_number);
+            },
+            ACK => { //Received data
+                let mut recv_buf = self.read_buf.get_buf();
+                self.ack_num = recv_buf.add(tpack.header.sequence_number, tpack.payload);
+                self.win_size = recv_buf.window();
+                self.read_buf.alert_ready();
+            },
+            FIN => {}, //Other dude wants to close the connection
+            _ => eprintln!("I got no clue how to deal with a packet that has flags: {}", header_flags(&tpack.header))
+        }
         println!("I got a packet wee!!!");
         TcpState::Established
     }
@@ -216,6 +219,22 @@ impl ConnectionSocket {
             }
         }
     }
+
+    pub fn receive(slf: Arc<Mutex<Self>>, bytes: u16) -> Vec<u8> {
+        let mut received = Vec::new();
+        let read_buf = {
+            let slf  = slf.lock().unwrap();
+            Arc::clone(&slf.read_buf)
+        };
+        loop  {
+            let remaining_amt = bytes - received.len() as u16;
+            if remaining_amt == 0 { break received }
+            let mut recv_buf = read_buf.wait();
+            let just_received = recv_buf.read(remaining_amt);
+            received.extend(just_received);
+        }
+    }
+    
 }
 
 //
@@ -232,19 +251,22 @@ struct SyncBuf<T: TcpBuffer> {
 }
 
 impl<T: TcpBuffer> SyncBuf<T> {
-    fn new(buf: T) -> SyncBuf<T> {
+    pub fn new(buf: T) -> SyncBuf<T> {
         SyncBuf { ready: Condvar::new(), buf: Mutex::new(buf) }
     }
-    fn alert_ready(&self) {
-        self.ready.notify_one();
-    }
-    fn wait(&self) -> std::sync::MutexGuard<T> {
+    pub fn alert_ready(&self) { self.ready.notify_one(); }
+    pub fn wait(&self) -> std::sync::MutexGuard<T> {
         let mut buf = self.buf.lock().unwrap();
         while !buf.ready() {
             buf = self.ready.wait(buf).unwrap();
         }
         buf
     }
+    pub fn get_buf(&self) -> std::sync::MutexGuard<T> { self.buf.lock().unwrap() }
+}
+
+trait TcpBuffer {
+    fn ready(&self) -> bool;
 }
 
 #[derive(Debug)]
@@ -264,18 +286,9 @@ impl TcpBuffer for SendBuf {
     }
 }
 
-trait TcpBuffer {
-    fn ready(&self) -> bool;
-}
-
 impl SendBuf {
-    fn new(window_size: u16) -> SendBuf {
-        SendBuf {
-            circ_buffer: CircularBuffer::new(),
-            nxt: 0,
-            rem_window: window_size,
-            num_acked: 0,
-        }
+    fn new() -> SendBuf { 
+        SendBuf { circ_buffer: CircularBuffer::new(), nxt: 0, rem_window: 0, num_acked: 0 }
     }
     ///Fills up the circular buffer with the data in filler until the buffer is full,
     ///then returns the original input filler vector drained of the values added to the circular buffer
@@ -329,9 +342,8 @@ struct RecvBuf {
 }
 
 impl TcpBuffer for RecvBuf {
-    fn ready(&self) -> bool {
-        self.circ_buffer.len() != 0
-    }
+    //Ready when buffer has some elements
+    fn ready(&self) -> bool { self.circ_buffer.len() != 0 }
 }
 
 impl RecvBuf {
