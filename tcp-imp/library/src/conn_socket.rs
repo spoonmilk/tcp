@@ -1,6 +1,8 @@
 use crate::prelude::*;
 use crate::tcp_utils::*;
 use crate::utils::*;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::sync::Condvar;
 
 #[derive(Debug)]
@@ -213,59 +215,135 @@ impl ConnectionSocket {
         }
     }
     //SEND AND RECEIVE
-
-    //Loops through sending packets of max size 1500 bytes until everything's been sent
-    pub fn send(slf: Arc<Mutex<Self>>, mut to_send: Vec<u8>) -> u16 {
-        //Spawn send_onwards thread
-        let buf_update = Arc::new(Condvar::new());
-
-        let thread_buf_update = Arc::clone(&buf_update);
-        let thread_slf = Arc::clone(&slf);
-        let send_onwards_join_handle = thread::spawn(move || Self::send_onwards(thread_slf, thread_buf_update));
-
-        //Continuously wait for there to be space in the buffer and add data till buffer is full
-        while !to_send.is_empty() {
-            //Wait till send_onwards says you can access slf now
-            let slf = slf.lock().unwrap();
-            let mut writer = slf.write_buf.wait();
-            to_send = writer.fill_with(to_send);
-            // Notify send_onwards of buffer update
-            buf_update.notify_one();
-        }
-        loop {
-            if send_onwards_join_handle.is_finished() {
-                send_onwards_join_handle.join().unwrap();
-                println!("send concluded, wrapping up send onwards");
+        pub fn send(
+            slf: Arc<Mutex<Self>>,
+            mut to_send: Vec<u8>,
+            buf_update: Arc<Condvar>,
+            is_running: Arc<AtomicBool>,
+            stop_signal: Arc<AtomicBool>,
+        ) -> u16 {
+            // Start `send_onwards` thread if not already running
+            if !is_running.load(Ordering::SeqCst) {
+                is_running.store(true, Ordering::SeqCst); // Mark thread as active
+                stop_signal.store(false, Ordering::SeqCst); // Clear stop signal
+    
+                let buf_update = Arc::new(Condvar::new());
+                let thread_buf_update = Arc::clone(&buf_update);
+                let thread_slf = Arc::clone(&slf);
+                let thread_is_running = Arc::clone(&is_running);
+                let thread_stop_signal = Arc::clone(&stop_signal);
+    
+                // Spawn `send_onwards` thread
+                thread::spawn(move || {
+                    Self::send_onwards(thread_slf, thread_buf_update, thread_is_running, thread_stop_signal);
+                });
             }
-            break;
+    
+            // Main `send` logic: fill the buffer and notify `send_onwards`
+            while !to_send.is_empty() {
+                let mut slf = slf.lock().unwrap();
+                let mut writer = slf.write_buf.get_buf();
+                to_send = writer.fill_with(to_send);
+    
+                // Notify `send_onwards` of buffer update
+                buf_update.notify_one();
+            }
+    
+            // Set `stop_signal` to true to signal `send_onwards` to complete
+            stop_signal.store(true, Ordering::SeqCst);
+            buf_update.notify_one(); // Ensure `send_onwards` wakes up if it's waiting
+    
+            println!("Stopping send");
+            0 // Return success or a meaningful result code
         }
-        //  slf.build_and_send(Vec::new(), ACK);
-        0
-    }
-    fn send_onwards(slf: Arc<Mutex<Self>>, buf_update: Arc<Condvar>) -> () {
-        loop {
-            // Acquire a lock on `slf`
-            let mut slf = slf.lock().unwrap();
-            // Retrieve the next chunk of data to send
-            let mut to_send: Vec<u8> = {
-                let mut writer = slf.write_buf.buf.lock().unwrap();
-                writer.next_data()
-            };
-            if to_send.is_empty() {
-                {
+    
+        fn send_onwards(
+            slf: Arc<Mutex<Self>>,
+            buf_update: Arc<Condvar>,
+            is_running: Arc<AtomicBool>,
+            stop_signal: Arc<AtomicBool>,
+        ) {
+            loop {
+                let mut slf = slf.lock().unwrap();
+    
+                // Retrieve the next chunk of data to send
+                let mut to_send = {
+                    let mut writer = slf.write_buf.get_buf();
+                    writer.next_data()
+                };
+    
+                // Wait if buffer is empty and no new data has arrived
+                if to_send.is_empty() {
+                    // Check if `stop_signal` is set and break if so
+                    if stop_signal.load(Ordering::SeqCst) {
+                        break;
+                    }
+    
+                    // Wait for data to be added or for the stop signal
                     let mut writer = slf.write_buf.buf.lock().unwrap();
                     writer = buf_update.wait(writer).unwrap();
                     to_send = writer.next_data();
                 }
-                return;
+    
+                // Send data over the network if available
+                if !to_send.is_empty() {
+                    if let Err(e) = slf.build_and_send(to_send, ACK) {
+                        eprintln!("Error sending data: {}", e);
+                        break; // Exit the loop if there's an error
+                    }
+                }
             }
-            // Send data over the network
-            if let Err(e) = slf.build_and_send(to_send, ACK) {
-                eprintln!("Error sending data: {}", e);
-                return; // Exit the loop if there's an error
-            }
+    
+            // Mark `send_onwards` as stopped
+            is_running.store(false, Ordering::SeqCst);
         }
-    }
+
+
+    //Loops through sending packets of max size 1500 bytes until everything's been sent
+    // pub fn send(slf: Arc<Mutex<Self>>, mut to_send: Vec<u8>) -> u16 {
+    //     //Spawn send_onwards thread
+    //     let buf_update = Arc::new(Condvar::new());
+    //     let thread_buf_update = Arc::clone(&buf_update);
+
+    //     let thread_slf = Arc::clone(&slf);
+    //     thread::spawn(move || Self::send_onwards(thread_slf, thread_buf_update));
+
+    //     //Continuously wait for there to be space in the buffer and add data till buffer is full
+    //     while !to_send.is_empty() {
+    //         //Wait till send_onwards says you can access slf now
+    //         let slf = slf.lock().unwrap();
+    //         let mut writer = slf.write_buf.wait();
+    //         to_send = writer.fill_with(to_send);
+    //         // Notify send_onwards of buffer update
+    //         buf_update.notify_one();
+    //     }
+    //     println!("Stopping send");
+    //     //  slf.build_and_send(Vec::new(), ACK);
+    //     0   
+    // }
+
+    // fn send_onwards(slf: Arc<Mutex<Self>>, buf_update: Arc<Condvar>) -> () {
+    //     loop { 
+    //         let mut slf = slf.lock().unwrap();
+    //         // Retrieve the next chunk of data to send
+    //         let mut to_send: Vec<u8> = {
+    //             let mut writer = slf.write_buf.buf.lock().unwrap();
+    //             writer.next_data()
+    //         };
+    //         if to_send.is_empty() {
+    //             {
+    //                 let mut writer = slf.write_buf.buf.lock().unwrap();
+    //                 writer = buf_update.wait(writer).unwrap();
+    //                 to_send = writer.next_data();
+    //             } 
+    //         }
+    //         // Send data over the network
+    //         if let Err(e) = slf.build_and_send(to_send, ACK) {
+    //             eprintln!("Error sending data: {}", e);
+    //             break; // Exit the loop if there's an error
+    //         } 
+    //     }
+    // }
 
     pub fn receive(slf: Arc<Mutex<Self>>, bytes: u16) -> Vec<u8> {
         let mut received = Vec::new();

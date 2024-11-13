@@ -1,3 +1,6 @@
+use std::sync::atomic::AtomicBool;
+use std::sync::Condvar;
+
 use crate::prelude::*;
 use crate::utils::*;
 use crate::vnode_traits::*;
@@ -97,7 +100,11 @@ impl HostBackend {
             Some(sock) => sock,
             None => return Err(Error::new(ErrorKind::InvalidInput, "Input socket ID does not match that of any connection sockets"))
         };
-        let bytes_sent = ConnectionSocket::send(sock, data);
+        let buf_update = Arc::new(Condvar::new());
+        let is_running = Arc::new(AtomicBool::new(false));
+        let stop_signal = Arc::new(AtomicBool::new(false));
+        
+        let bytes_sent = ConnectionSocket::send(sock, data, buf_update, is_running, stop_signal);
         Ok(bytes_sent)
     }
     pub fn tcp_recieve(&self, sid: SocketId, bytes: u16) -> Result<Vec<u8>> {
