@@ -27,6 +27,8 @@ impl VnodeRepl<HostBackend> for HostRepl {
             ("ls".to_string(), CommandData { handler: Self::wrap_host_handler(Self::ls_handler), num_args: NumArgs::Exactly(0) }),
             ("s".to_string(), CommandData { handler: Self::wrap_host_handler(Self::s_handler), num_args: NumArgs::Exactly(2) }), 
             ("r".to_string(), CommandData { handler: Self::wrap_host_handler(Self::r_handler), num_args: NumArgs::Exactly(2) }),
+            ("sf".to_string(), CommandData { handler: Self::wrap_host_handler(Self::sf_handler), num_args: NumArgs::Exactly(3) }),
+            ("rf".to_string(), CommandData { handler: Self::wrap_host_handler(Self::rf_handler), num_args: NumArgs::Exactly(2) }),
         ];
         let mut all_commands = self.get_base_commands();
         all_commands.append(&mut custom_commands);
@@ -99,6 +101,25 @@ impl HostRepl {
             },
             Err(e) => println!("{}", e.to_string())
         }
+    }
+    pub fn sf_handler(backend: &HostBackend, args: Vec<String>) -> () {
+        //Sanitize input
+        //Spawn a thread that...
+        //First calls backend.connect() on ip address and port number
+        //Then loops through... 
+        //Reading 1kb of the file 
+        //Calling backend.tcp_send() on the data and waiting for it to finish
+        //Continues to do this until we've read the entire file
+        //Closes the connection 
+    }
+    pub fn rf_handler(backend: &HostBackend, args: Vec<String>) -> () {
+        //Sanitize input
+        //Spawn a thread...
+        //First calls backend.listen() and backend.accept(1)
+        //Then loops through...
+        //Calling backend.tcp_recv() and waiting to receive 1kb
+        //Writing this data it into the file
+        //Waits for sender to close the connection
     }
     fn wrap_host_handler<F>(f: F) -> CommandHandler
     where
