@@ -216,36 +216,35 @@ impl ConnectionSocket {
 
     //Loops through sending packets of max size 1500 bytes until everything's been sent
     pub fn send(slf: Arc<Mutex<Self>>, mut to_send: Vec<u8>) -> u16 {
-        //Spawn send_onwards thread
+        //Make condvar to communicate with send onwards thread
         let buf_update = Arc::new(Condvar::new());
-
         let thread_buf_update = Arc::clone(&buf_update);
-        let thread_slf = Arc::clone(&slf);
-        let send_onwards_join_handle = thread::spawn(move || Self::send_onwards(thread_slf, thread_buf_update));
+        //Grab reference to writer_buf and clone for send onwards thread
+        let write_buf = {
+            let slf = slf.lock().unwrap();
+            Arc::clone(&slf.write_buf)
+        }
+        let thread_buf = Arc::clone(&write_buf);
+        //Spawn send onwards thread
+        let send_onwards_join_handle = thread::spawn(move || Self::send_onwards(thread_buf, thread_buf_update));
 
         //Continuously wait for there to be space in the buffer and add data till buffer is full
+        let mut bytes_sent = 0;
         while !to_send.is_empty() {
             //Wait till send_onwards says you can access slf now
             let slf = slf.lock().unwrap();
             let mut writer = slf.write_buf.wait();
+            let old_len = to_send.len();
             to_send = writer.fill_with(to_send);
+            bytes_sent += old_len - to_send.len();
             // Notify send_onwards of buffer update
             buf_update.notify_one();
         }
-        loop {
-            if send_onwards_join_handle.is_finished() {
-                send_onwards_join_handle.join().unwrap();
-                println!("send concluded, wrapping up send onwards");
-            }
-            break;
-        }
-        //  slf.build_and_send(Vec::new(), ACK);
-        0
+        send_onwards_join_handle.join().expect("Joining send onwards thread failed");
+        bytes_sent as u16
     }
-    fn send_onwards(slf: Arc<Mutex<Self>>, buf_update: Arc<Condvar>) -> () {
+    fn send_onwards(write_buf: Arc<SyncBuf<RecvBuf>, buf_update: Arc<Condvar>) -> () {
         loop {
-            // Acquire a lock on `slf`
-            let mut slf = slf.lock().unwrap();
             // Retrieve the next chunk of data to send
             let mut to_send: Vec<u8> = {
                 let mut writer = slf.write_buf.buf.lock().unwrap();
