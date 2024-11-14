@@ -27,7 +27,7 @@ fn init_interfaces(
         }
         //Add the completed Interfaces and InterfaceReps to their corresponding vectors for return
         let new_interface = Interface::new(
-            inter_conf.assigned_ip.clone(),
+            // inter_conf.assigned_ip.clone(),
             inter_neighbors,
             inter_conf.udp_port
         );

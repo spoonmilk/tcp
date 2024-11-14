@@ -102,7 +102,7 @@ impl HostRepl {
             Err(e) => println!("{}", e.to_string())
         }
     }
-    pub fn sf_handler(backend: &HostBackend, args: Vec<String>) -> () {
+    pub fn sf_handler(_backend: &HostBackend, _args: Vec<String>) -> () {
         //Sanitize input
         //Spawn a thread that...
         //First calls backend.connect() on ip address and port number
@@ -112,7 +112,7 @@ impl HostRepl {
         //Continues to do this until we've read the entire file
         //Closes the connection 
     }
-    pub fn rf_handler(backend: &HostBackend, args: Vec<String>) -> () {
+    pub fn rf_handler(_backend: &HostBackend, _args: Vec<String>) -> () {
         //Sanitize input
         //Spawn a thread...
         //First calls backend.listen() and backend.accept(1)

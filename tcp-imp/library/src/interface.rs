@@ -3,7 +3,7 @@ use crate::utils::*;
 
 #[derive(Debug)]
 pub struct Interface {
-    pub v_ip: Ipv4Addr,
+    // pub v_ip: Ipv4Addr,
     pub neighbors: HashMap<Ipv4Addr, u16>,
     pub status: Mutex<InterfaceStatus>, //Only non-static field - represents current status of the interface
     pub udp_sock: UdpSocket
@@ -11,12 +11,12 @@ pub struct Interface {
 
 impl Interface {
     pub fn new(
-        v_ip: Ipv4Addr,
+        // v_ip: Ipv4Addr,
         neighbors: HashMap<Ipv4Addr, u16>,
         udp_port: u16
     ) -> Interface {
         Interface {
-            v_ip,
+            // v_ip,
             neighbors,
             status: Mutex::new(InterfaceStatus::Up), //Status always starts as Up
             udp_sock: UdpSocket::bind(format!("127.0.0.1:{}", udp_port)).expect("Unable to bind to port")

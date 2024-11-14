@@ -353,7 +353,7 @@ trait TcpBuffer {
 struct SendBuf {
     circ_buffer: CircularBuffer<BUFFER_CAPACITY, u8>,
     //una: usize, Don't need, b/c una will always be 0 technically
-    nxt: usize,
+    nxt: usize, // Pointer to next byte to be sent ; NOTE, UPDATE AS BYTES DRAINED
     //lbw: usize Don't need b/c lbw will always be circ_buffer.len() technically
     rem_window: u16,
     num_acked: u32,
@@ -391,18 +391,17 @@ impl SendBuf {
     ///Returns a vector of data to be put in the next TcpPacket to send, taking into account the input window size of the receiver
     ///This vector contains as many bytes as possible up to the maximum payload size (1500)
     fn next_data(&mut self) -> Vec<u8> {
-        println!("nxt: {}, circ buf len: {}", self.nxt, self.circ_buffer.len());
         //Takes into account the three constraints on how much data can be sent in the next TcpPacket (window size, maximum message size, and amount of data in the buffer)
         //and finds the appropriate
         let constraints = vec![
             self.rem_window as usize,
             self.circ_buffer.len() - self.nxt,
             MAX_MSG_SIZE,
-        ];
-
-        // println!("Individual constraints:\nremote window size: {}\nbytes in buffer past nxt: {}\nmax message size: {}", constraints[0], constraints[1], constraints[2]);
-        let greatest_constraint = constraints.iter().min().unwrap();
+        ]; 
+        // Obtain greatest (unintuitively, smallest) constraint
+        let greatest_constraint = constraints.iter().min().unwrap(); 
         let upper_bound = self.nxt + greatest_constraint;
+        // Grab data, feed to sender
         let data: Vec<u8> = self
             .circ_buffer
             .range(self.nxt..upper_bound)
@@ -411,11 +410,11 @@ impl SendBuf {
         self.nxt = upper_bound;
         data
     } 
-    //Acknowledges (drops) all sent bytes up to the one indicated by most_recent_ack
+    ///Acknowledges (drops) all sent bytes up to the one indicated by most_recent_ack
     fn ack_data(&mut self, most_recent_ack: u32) {
         // Caclulate relative acknowledged data
         let relative_ack = most_recent_ack - (self.num_acked + self.our_init_seq + 1);
-        // Decrement nxt pointer to match dropped data - compensation for absence of una
+        // Decrement nxt pointer to match dropped data ; compensation for absence of una
         self.nxt -= relative_ack as usize;
         // Drain out acknowledged data
         self.circ_buffer.drain(..relative_ack as usize);
@@ -492,7 +491,7 @@ impl RecvBuf {
     pub fn window(&self) -> u16 {
         (self.circ_buffer.capacity() - self.circ_buffer.len()) as u16
     }
-
+    /// Set the sequence number
     pub fn set_seq(&mut self, seq_num: u32) {
         self.rem_init_seq = seq_num;
     }

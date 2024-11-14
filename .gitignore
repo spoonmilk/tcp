@@ -24,3 +24,5 @@
 
 # Our rust build directory
 ./tcp-imp/target
+vhost
+vrouter

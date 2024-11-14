@@ -99,7 +99,7 @@ pub fn has_only_flags(head: &TcpHeader, flags: u8) -> bool {
 }
 
 /// Checks if a TCP header has the specified flags, ignoring other flags
-pub fn has_flags(head: &TcpHeader, flags: u8) -> bool {
+pub fn _has_flags(head: &TcpHeader, flags: u8) -> bool {
     let head_flags = header_flags(&head);
     (head_flags & flags) == flags
 }
