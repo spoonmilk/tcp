@@ -314,7 +314,7 @@ impl ConnectionSocket {
 //SEND AND RECV BUFFERS
 //
 
-const MAX_MSG_SIZE: usize = 1500;
+const MAX_MSG_SIZE: usize = 1480;
 const BUFFER_CAPACITY: usize = 65535;
 
 #[derive(Debug)]

@@ -79,7 +79,7 @@ impl HostBackend {
         // Return a new TcpAddress with the local IP and a random port
         TcpAddress::new(local_ip, port as u16)
     }
-    fn find_conn_socket(socket_table: RwLockReadGuard<SocketTable>, dst_ip: &Ipv4Addr, port: &u16) -> Option<SocketId> {
+    pub fn find_conn_socket(socket_table: RwLockReadGuard<SocketTable>, dst_ip: &Ipv4Addr, port: &u16) -> Option<SocketId> {
         for (sid, ent) in &*socket_table {
             match ent {
                 SocketEntry::Connection(ent) if (ent.dst_addr.ip == *dst_ip) && (ent.dst_addr.port == *port) => {

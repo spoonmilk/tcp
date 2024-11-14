@@ -10,6 +10,11 @@ use library::vnode_traits::VnodeBackend; //Hopefully this can be removed in the 
 use std::thread;
 use std::sync::mpsc::Receiver;
 use std::sync::Arc;
+use std::fs::File;
+use std::io::{self, Read};
+use std::path::{Path, PathBuf};
+
+const READ_CHUNK: usize = 1024;
 
 pub struct HostRepl {
     pub backend: HostBackend,
@@ -59,7 +64,7 @@ impl HostRepl {
     }
 
     pub fn c_handler(backend: &HostBackend, args: Vec<String>) -> () {
-        //Sanititze input
+        //Sanitize input
         let ip_addr = if let Ok(ip_addr) = args[0].parse::<Ipv4Addr>() { ip_addr } else { return println!("Input IP address \"{}\" invalid", args[0]) };
         let port = if let Ok(port) = args[1].parse::<u16>() { port } else { return println!("Input IP address \"{}\" invalid", args[1]) };
         //Connect on an ip and port
@@ -102,8 +107,48 @@ impl HostRepl {
             Err(e) => println!("{}", e.to_string())
         }
     }
-    pub fn sf_handler(_backend: &HostBackend, _args: Vec<String>) -> () {
-        //Sanitize input
+    pub fn sf_handler(backend: &HostBackend, args: Vec<String>) -> () {
+        //Sanitize input 
+        let filepath: PathBuf = {
+            if let Ok(path) = Path::new(&args[0]).canonicalize() {
+                // Check that inputted filepath exists and is a file/not a directory
+                if path.exists() && path.is_file() {
+                    path
+                } else {
+                    return eprintln!("Input file path {} does not exist or is not a file", args[0]);
+                }
+            } else {
+                return eprintln!("Input file path {} invalid", args[0]);
+            }
+        };
+        let ip_addr = if let Ok(ip_addr) = args[1].parse::<Ipv4Addr>() { ip_addr } else { return eprintln!("Input IP address \"{}\" invalid", args[1]) };
+        let port = if let Ok(port) = args[2].parse::<u16>() { port } else { return eprintln!("Input port \"{}\" invalid", args[2]) };
+        // Open the file
+        let mut file = match File::open(filepath) {
+            Ok(file) => file,
+            Err(e) => return eprintln!("Unable to open file: {}", e)
+        };
+        // 1 kb buffer for reading into send
+        let mut buf: Vec<u8> = vec![0u8; READ_CHUNK];
+        // Call connect and establish a connection on the inputted ip and port
+        backend.connect(ip_addr, port);
+        let sock_table = backend.socket_table();
+        let sid = match HostBackend::find_conn_socket(sock_table, &ip_addr, &port) {
+           None => return eprintln!("Unable to find connection socket"),
+           Some(sid) => sid 
+        };
+
+        loop {
+            let bytes_read = file.read(&mut buf).unwrap();
+            if bytes_read == 0 {
+                break;
+            } 
+            match backend.tcp_send(sid, buf[..bytes_read].to_vec()) {
+                Ok(_) => (),
+                Err(e) => println!("{}", e.to_string())
+            };
+        }
+
         //Spawn a thread that...
         //First calls backend.connect() on ip address and port number
         //Then loops through... 
