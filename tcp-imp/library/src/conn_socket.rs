@@ -1,8 +1,8 @@
 use crate::prelude::*;
 use crate::tcp_utils::*;
 use crate::utils::*;
-use std::sync::atomic::{AtomicU16, AtomicU32, AtomicBool};
 use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32};
 use std::sync::Condvar;
 
 #[derive(Debug)]
@@ -11,8 +11,8 @@ pub struct ConnectionSocket {
     pub src_addr: TcpAddress,
     pub dst_addr: TcpAddress,
     ip_sender: Arc<Sender<PacketBasis>>,
-    seq_num: u32, //Dynamic
-    ack_num: Arc<AtomicU32>, //Dynamic
+    seq_num: u32,             //Dynamic
+    ack_num: Arc<AtomicU32>,  //Dynamic
     win_size: Arc<AtomicU16>, //Dynamic
     read_buf: Arc<SyncBuf<RecvBuf>>,
     write_buf: Arc<SyncBuf<SendBuf>>,
@@ -95,7 +95,8 @@ impl ConnectionSocket {
     }
     fn process_syn_ack(&mut self, tpack: TcpPacket) -> TcpState {
         if has_only_flags(&tpack.header, SYN | ACK) {
-            self.ack_num.store(tpack.header.sequence_number, Ordering::SeqCst);
+            self.ack_num
+                .store(tpack.header.sequence_number, Ordering::SeqCst);
             self.ack_num.fetch_add(1, Ordering::SeqCst); //A SYN was received
             self.build_and_send(Vec::new(), ACK)
                 .expect("Error sending TCP packet to IP Daemon");
@@ -114,6 +115,7 @@ impl ConnectionSocket {
         TcpState::SynRecvd
     }
     fn established_handle(&mut self, tpack: TcpPacket) -> TcpState {
+        println!("Got a packet");
         match header_flags(&tpack.header) {
             ACK if tpack.payload.len() == 0 => {
                 //Received an acknowledgement of data sent
@@ -123,14 +125,21 @@ impl ConnectionSocket {
             ACK => {
                 //Received data
                 let mut recv_buf = self.read_buf.get_buf();
-                self.ack_num.store(recv_buf.add(tpack.header.sequence_number, tpack.payload.clone()), Ordering::SeqCst);
-                self.win_size.store(recv_buf.window(), Ordering::SeqCst);
+                self.ack_num.store(
+                    recv_buf.add(tpack.header.sequence_number, tpack.payload.clone()),
+                    Ordering::SeqCst,
+                );
+
+                self.win_size.store(recv_buf.window(), Ordering::SeqCst); 
                 println!("new window size: {}", self.win_size.load(Ordering::SeqCst));
-                drop(recv_buf); 
+                let mut send_buf = self.write_buf.get_buf();
+                send_buf.update_window(recv_buf.window());
+                drop(recv_buf);
+                drop(send_buf);
                 match self.build_and_send(Vec::new(), ACK) {
                     Ok(_) => println!("Acknowledged received data"),
                     Err(e) => eprintln!("Error sending ACK: {}", e),
-                }
+                } 
                 self.read_buf.alert_ready();
             }
             FIN => {} //Other dude wants to close the connection
@@ -138,7 +147,7 @@ impl ConnectionSocket {
                 "I got no clue how to deal with a packet that has flags: {}",
                 header_flags(&tpack.header)
             ),
-        } 
+        }
         TcpState::Established
     }
 
@@ -228,11 +237,9 @@ impl ConnectionSocket {
         let thread_slf = Arc::clone(&slf);
 
         let thread_send_onwards = thread::Builder::new()
-        .name("send_onwards".to_string())
-        .spawn(move || Self::send_onwards(thread_slf, thread_buf_update, thread_terminate_send))
-        .expect("Could not spawn thread");
-
-        println!("Starting send");
+            .name("send_onwards".to_string())
+            .spawn(move || Self::send_onwards(thread_slf, thread_buf_update, thread_terminate_send))
+            .expect("Could not spawn thread");
 
         //Continuously wait for there to be space in the buffer and add data till buffer is full
         let mut bytes_sent = 0;
@@ -247,14 +254,16 @@ impl ConnectionSocket {
             buf_update.notify_one();
         }
         terminate_send.store(true, Ordering::SeqCst);
-        println!("Stopping send");
 
-        thread_send_onwards.join().expect("Thread panicked");
-        //  slf.build_and_send(Vec::new(), ACK);
+        thread_send_onwards.join().expect("Send onwards thread panicked");
         bytes_sent as u16
     }
 
-    fn send_onwards(slf: Arc<Mutex<Self>>, buf_update: Arc<Condvar>, terminate_send: Arc<AtomicBool>) -> () {
+    fn send_onwards(
+        slf: Arc<Mutex<Self>>,
+        buf_update: Arc<Condvar>,
+        terminate_send: Arc<AtomicBool>,
+    ) -> () {
         let write_buf = {
             let slf = slf.lock().unwrap();
             Arc::clone(&slf.write_buf)
@@ -266,24 +275,23 @@ impl ConnectionSocket {
                 writer.next_data()
             };
             if to_send.is_empty() {
-                if terminate_send.load(Ordering::SeqCst) {
-                    println!("Received termination signal ; stopping send_onwards");
+                if terminate_send.load(Ordering::SeqCst) { 
                     break;
                 } else {
                     let mut writer = write_buf.buf.lock().unwrap();
                     writer = buf_update.wait(writer).unwrap();
                     to_send = writer.next_data();
-                } 
+                }
             }
             // Send data over the network
             let mut slf = slf.lock().unwrap();
             if let Err(e) = slf.build_and_send(to_send, ACK) {
                 eprintln!("Error sending data: {}", e);
                 break; // Exit the loop if there's an error
-            } 
+            }
         }
     }
- 
+
     pub fn receive(slf: Arc<Mutex<Self>>, bytes: u16) -> Vec<u8> {
         let mut received = Vec::new();
         let read_buf = {
@@ -350,7 +358,7 @@ struct SendBuf {
     //lbw: usize Don't need b/c lbw will always be circ_buffer.len() technically
     rem_window: u16,
     num_acked: u32,
-    our_init_seq: u32
+    our_init_seq: u32,
 }
 
 impl TcpBuffer for SendBuf {
@@ -383,30 +391,27 @@ impl SendBuf {
     }
     ///Returns a vector of data to be put in the next TcpPacket to send, taking into account the input window size of the receiver
     ///This vector contains as many bytes as possible up to the maximum payload size (1500)
-    fn next_data(&mut self) -> Vec<u8> { 
+    fn next_data(&mut self) -> Vec<u8> {
+        println!("nxt: {}, circ buf len: {}", self.nxt, self.circ_buffer.len());
         //Takes into account the three constraints on how much data can be sent in the next TcpPacket (window size, maximum message size, and amount of data in the buffer)
         //and finds the appropriate
         let constraints = vec![
             self.rem_window as usize,
             self.circ_buffer.len() - self.nxt,
             MAX_MSG_SIZE,
-        ]; 
+        ];
+
+        // println!("Individual constraints:\nremote window size: {}\nbytes in buffer past nxt: {}\nmax message size: {}", constraints[0], constraints[1], constraints[2]);
         let greatest_constraint = constraints.iter().min().unwrap();
         let upper_bound = self.nxt + greatest_constraint;
-        println!(
-            "nxt: {}, greatest constraint: {}, upper_bound: {}",
-            self.nxt, greatest_constraint, upper_bound
-        );
-
         let data: Vec<u8> = self
             .circ_buffer
             .range(self.nxt..upper_bound)
             .cloned()
             .collect();
-        self.nxt = upper_bound; 
-        println!("ITS NEXT_DATA");
+        self.nxt = upper_bound;
         data
-    }
+    } 
     //Acknowledges (drops) all sent bytes up to the one indicated by most_recent_ack
     fn ack_data(&mut self, most_recent_ack: u32) {
         let relative_ack = most_recent_ack - (self.num_acked + self.our_init_seq + 1);
