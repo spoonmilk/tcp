@@ -12,9 +12,9 @@ pub struct ConnectionSocket {
     pub src_addr: TcpAddress,
     pub dst_addr: TcpAddress,
     ip_sender: Arc<Sender<PacketBasis>>,
-    seq_num: u32,             //Dynamic
-    ack_num: Arc<AtomicU32>,  //Dynamic
-    win_size: Arc<AtomicU16>, //Dynamic
+    seq_num: u32, //Only edited in build_and_send() and viewed in build_packet()
+    ack_num: Arc<AtomicU32>, //Edited every time a packet is received (first_syn_ack(), process_syn_ack(), establish_handler()) and viewed in build_packet()
+    win_size: Arc<AtomicU16>, //Edited every time data is received and data is taken out of RecvBuffer
     read_buf: Arc<SyncBuf<RecvBuf>>,
     write_buf: Arc<SyncBuf<SendBuf>>,
 }
@@ -26,7 +26,6 @@ impl ConnectionSocket {
         src_addr: TcpAddress,
         dst_addr: TcpAddress,
         ip_sender: Arc<Sender<PacketBasis>>,
-        ack_num: u32,
     ) -> ConnectionSocket {
         let mut rand_rng = rand::thread_rng();
         let seq_num = rand_rng.gen::<u32>() / 2;
@@ -34,9 +33,9 @@ impl ConnectionSocket {
             state,
             src_addr,
             dst_addr,
-            seq_num,
+            seq_num, 
             ip_sender,
-            ack_num: Arc::new(AtomicU32::new(ack_num)),
+            ack_num: Arc::new(AtomicU32::new(0)),
             win_size: Arc::new(AtomicU16::new(BUFFER_CAPACITY as u16)),
             read_buf: Arc::new(SyncBuf::new(RecvBuf::new())),
             write_buf: Arc::new(SyncBuf::new(SendBuf::new(seq_num))),

@@ -49,6 +49,7 @@ impl SocketManager {
         match listener_table.get_mut(&port) {
             Some(listener) => {
                 listener.accepting = true;
+                //TODO: Needs to start all pending connections
             },
             None => return // Listener was closed in the before this function got c
         };
@@ -64,12 +65,11 @@ impl SocketManager {
         //Construct pending connection for incoming client
         let src_addr = TcpAddress::new(Ipv4Addr::from(ip_head.destination), tcp_pack.header.destination_port);
         let dst_addr = TcpAddress::new(Ipv4Addr::from(ip_head.source), tcp_pack.header.source_port);
-        let ack_num = tcp_pack.header.sequence_number;
         let state = Arc::new(RwLock::new(TcpState::SynRecvd)); //Always start in syn recved state when spawned by listener socket 
         
         // Clone arc of ip_sender, create new connection socket
         let ip_send = self.ip_sender.clone();
-        let conn_sock = ConnectionSocket::new(state, src_addr.clone(), dst_addr.clone(), ip_send, ack_num);
+        let conn_sock = ConnectionSocket::new(state, src_addr.clone(), dst_addr.clone(), ip_send);
 
         let mut sock_table = self.socket_table.write().unwrap();
         let pending_conn = PendingConn::new(conn_sock);
