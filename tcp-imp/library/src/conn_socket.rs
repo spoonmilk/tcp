@@ -13,7 +13,7 @@ pub struct ConnectionSocket {
     pub dst_addr: TcpAddress,
     ip_sender: Arc<Sender<PacketBasis>>,
     seq_num: u32, //Only edited in build_and_send() and viewed in build_packet()
-    ack_num: Arc<AtomicU32>, //Edited every time a packet is received (first_syn_ack(), process_syn_ack(), establish_handler()) and viewed in build_packet()
+    ack_num: u32, //Edited every time a packet is received (first_syn_ack(), process_syn_ack(), establish_handler()) and viewed in build_packet()
     win_size: Arc<AtomicU16>, //Edited every time data is received and data is taken out of RecvBuffer
     read_buf: Arc<SyncBuf<RecvBuf>>,
     write_buf: Arc<SyncBuf<SendBuf>>,
@@ -35,7 +35,7 @@ impl ConnectionSocket {
             dst_addr,
             seq_num, 
             ip_sender,
-            ack_num: Arc::new(AtomicU32::new(0)),
+            ack_num: Arc::new(0),
             win_size: Arc::new(AtomicU16::new(BUFFER_CAPACITY as u16)),
             read_buf: Arc::new(SyncBuf::new(RecvBuf::new())),
             write_buf: Arc::new(SyncBuf::new(SendBuf::new(seq_num))),
@@ -58,8 +58,8 @@ impl ConnectionSocket {
     }
     pub fn first_syn_ack(slf: Arc<Mutex<Self>>, t_pack: TcpPacket) {
         let mut slf = slf.lock().unwrap();
-
         slf.ack_num.fetch_add(1, Ordering::SeqCst);
+        //Send response and change state
         slf.build_and_send(Vec::new(), SYN | ACK)
             .expect("Error sending to IpDaemon");
         let mut state = slf.state.write().unwrap();
@@ -92,6 +92,11 @@ impl ConnectionSocket {
         };
         let mut state = slf.state.write().unwrap();
         *state = new_state;
+    }
+    fn process_syn(&mut self, tpack: TcpPacket) -> TcpState {
+        if has_only_flags(&tpack.header, SYN) {
+            self.ack_num = 
+        }
     }
     fn process_syn_ack(&mut self, tpack: TcpPacket) -> TcpState {
         if has_only_flags(&tpack.header, SYN | ACK) {
@@ -501,7 +506,7 @@ impl RecvBuf {
     }
     ///Returns the next expected sequence number - only used privately, self.add() returns next sequence number too for public use
     fn expected_seq(&self) -> u32 {
-        self.bytes_read + ((self.circ_buffer.len() + 1) as u32) + self.rem_init_seq
+        self.rem_init_seq + self.bytes_read + ((self.circ_buffer.len() + 1) as u32)
     }
     ///Returns the buffer's current window size
     pub fn window(&self) -> u16 {
