@@ -496,3 +496,42 @@ impl RecvBuf {
         self.rem_init_seq = seq_num;
     }
 }
+/* Algorithm for calculatating RTO and successive:
+
+SEE RFC 6298
+Note: G assumed to be 0
+
+init state:
+RTO_INITIAL = 1
+min_rto, max_rto, alpha, beta = 1, 100, 0.125, 0.25
+retransmission count = 0
+
+AFTER FIRST RTT -> R
+SRTT = R
+RTTVAR = R/2
+RTO = SRTT + (K * RTTVAR)
+
+AFTER SECOND RTT -> R'
+SRTT = (1 - ALPHA) * SRTT + ALPHA * R'
+RTTVAR = (1 - BETA) * RTTVAR + BETA * ABS(SRTT - R')
+
+SUCCESSIVE:
+RTO = SRTT + (K * RTTVAR)
+
+*/
+
+const MIN_RTO: u32 = 1; // Milliseconds
+const MAX_RTO: u32 = 100; // Milliseconds
+const ALPHA: f32 = 0.125; // Multiplier
+const BETA: f32 = 0.25; // Multiplier
+const K: u32 = 4; // Multiplier 
+
+pub struct RetransmissionTimer {
+    rto: Duration,             // RTO: retransmission timeout
+    srtt: Option<Duration>,    // Initially none, see above algo
+    rttvar: Option<Duration>,  // Initially none, see above algo
+    min_rto: Duration,         // Minimum RTO: 1ms for imp, 150-250ms for testing
+    max_rto: Duration,         // Maximum RTO: 100ms(?)
+    retransmission_count: u32, // Attempt counter ; stop at 3
+    time_since_resend: u32     // Should actually be a duration, created on startup with val 0 then updated at each retransmission
+}
