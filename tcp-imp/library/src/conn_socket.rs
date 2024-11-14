@@ -2,7 +2,7 @@ use crate::prelude::*;
 use crate::tcp_utils::*;
 use crate::utils::*;
 use std::sync::atomic::Ordering;
-use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32};
+use std::sync::atomic::AtomicBool;
 use std::sync::Condvar;
 use std::time::{Duration, Instant};
 
@@ -14,7 +14,6 @@ pub struct ConnectionSocket {
     ip_sender: Arc<Sender<PacketBasis>>,
     seq_num: u32, //Only edited in build_and_send() and viewed in build_packet()
     ack_num: u32, //Edited every time a packet is received (first_syn_ack(), process_syn_ack(), establish_handler()) and viewed in build_packet()
-    win_size: Arc<AtomicU16>, //Edited every time data is received and data is taken out of RecvBuffer
     read_buf: Arc<SyncBuf<RecvBuf>>,
     write_buf: Arc<SyncBuf<SendBuf>>,
 }
@@ -35,20 +34,13 @@ impl ConnectionSocket {
             dst_addr,
             seq_num, 
             ip_sender,
-            ack_num: Arc::new(0),
-            win_size: Arc::new(AtomicU16::new(BUFFER_CAPACITY as u16)),
+            ack_num: 0, //We don't know what the ack number should be yet - in some sense, self.set_init_ack() finishes the initialization of the socket
             read_buf: Arc::new(SyncBuf::new(RecvBuf::new())),
             write_buf: Arc::new(SyncBuf::new(SendBuf::new(seq_num))),
         }
     }
 
-    /*
-    pub fn recv(slf: Arc<Mutex<Self>>, bytes: u16) -> (u16, Vec<u8>) {
-        //Pulls up to bytes data out of recv buffer and returns amount of bytes read plus the data as a string
-    }*/
-
     //Sending first messages in handshake
-
     pub fn first_syn(slf: Arc<Mutex<Self>>) {
         let mut slf = slf.lock().unwrap();
         slf.build_and_send(Vec::new(), SYN)
@@ -56,34 +48,24 @@ impl ConnectionSocket {
         let mut state = slf.state.write().unwrap();
         *state = TcpState::SynSent;
     }
-    pub fn first_syn_ack(slf: Arc<Mutex<Self>>, t_pack: TcpPacket) {
-        let mut slf = slf.lock().unwrap();
-        slf.ack_num.fetch_add(1, Ordering::SeqCst);
-        //Send response and change state
-        slf.build_and_send(Vec::new(), SYN | ACK)
-            .expect("Error sending to IpDaemon");
-        let mut state = slf.state.write().unwrap();
-
-        // Initializing send and receive buffers
-        let mut send_buf = slf.write_buf.get_buf();
-        send_buf.update_window(t_pack.header.window_size);
-        println!("Remote window has size: {}", t_pack.header.window_size);
-        let mut recv_buf = slf.read_buf.get_buf();
-        recv_buf.set_seq(t_pack.header.sequence_number);
-
-        *state = TcpState::SynRecvd;
-    }
 
     //
     //HANDLING INCOMING PACKETS
     //
     pub fn handle_packet(slf: Arc<Mutex<Self>>, tpack: TcpPacket) {
         let mut slf = slf.lock().unwrap();
+        //Universal packet reception actions
+        { //Update window size
+            let mut write_buf = slf.write_buf.get_buf();
+            write_buf.update_window(tpack.header.window_size);
+        }
+        //State specific packet recpetion actions
         let new_state = {
             let slf_state = slf.state.read().unwrap();
             let state = slf_state.clone();
             drop(slf_state);
             match state {
+                TcpState::Initialized => slf.process_syn(tpack),
                 TcpState::SynSent => slf.process_syn_ack(tpack),
                 TcpState::SynRecvd => slf.process_ack(tpack),
                 TcpState::Established => slf.established_handle(tpack),
@@ -95,56 +77,49 @@ impl ConnectionSocket {
     }
     fn process_syn(&mut self, tpack: TcpPacket) -> TcpState {
         if has_only_flags(&tpack.header, SYN) {
-            self.ack_num = 
+            //Deal with receiving first sequence number of TCP partner
+            self.set_init_ack(tpack.header.sequence_number);
+            //Send response (SYN + ACK in this case) and change state
+            self.build_and_send(Vec::new(), SYN | ACK)
+                .expect("Error sending TCP packet to IP Daemon");
+            return TcpState::SynRecvd;
         }
+        panic!("Hmm, process_syn was called for a packet that was not SYN - check listener_recv()")
     }
     fn process_syn_ack(&mut self, tpack: TcpPacket) -> TcpState {
         if has_only_flags(&tpack.header, SYN | ACK) {
-            self.ack_num
-                .store(tpack.header.sequence_number, Ordering::SeqCst);
-            self.ack_num.fetch_add(1, Ordering::SeqCst); //A SYN was received
+            //Deal with receiving first sequence number of TCP partner
+            self.set_init_ack(tpack.header.sequence_number);
+            //Send response (ACK in this case) and change state
             self.build_and_send(Vec::new(), ACK)
                 .expect("Error sending TCP packet to IP Daemon");
-            let mut send_buf = self.write_buf.get_buf();
-            send_buf.update_window(tpack.header.window_size);
-            println!("Remote window has size: {}", tpack.header.window_size);
             return TcpState::Established;
         }
         TcpState::SynSent
     }
     fn process_ack(&self, tpack: TcpPacket) -> TcpState {
-        if has_only_flags(&tpack.header, ACK) {
-            println!("Received final acknowledgement, TCP handshake successful!");
-            return TcpState::Established;
-        }
+        if has_only_flags(&tpack.header, ACK) { return TcpState::Established; }
         TcpState::SynRecvd
     }
     fn established_handle(&mut self, tpack: TcpPacket) -> TcpState {
-        println!("Got a packet");
         match header_flags(&tpack.header) {
-            ACK if tpack.payload.len() == 0 => {
-                //Received an acknowledgement of data sent
+            ACK if tpack.payload.len() == 0 => { //Received an acknowledgement of data sent
                 let mut send_buf = self.write_buf.get_buf();
                 send_buf.ack_data(tpack.header.acknowledgment_number);
             }
-            ACK => {
-                //Received data
+            ACK => { //Received data
+                //Add data to Recv Buffer
                 let mut recv_buf = self.read_buf.get_buf();
-                self.ack_num.store(
-                    recv_buf.add(tpack.header.sequence_number, tpack.payload.clone()),
-                    Ordering::SeqCst,
-                );
-                self.win_size.store(recv_buf.window(), Ordering::SeqCst);
-                println!("new window size: {}", self.win_size.load(Ordering::SeqCst));
-                let mut send_buf = self.write_buf.get_buf();
-                send_buf.update_window(recv_buf.window());
+                let new_ack = recv_buf.add(tpack.header.sequence_number, tpack.payload.clone());
+                self.ack_num = new_ack;
                 drop(recv_buf);
-                drop(send_buf);
+                //Let any waiting receive() thread know that data was just added to the receive buffer
+                self.read_buf.alert_ready();
+                //Send acknowledgement for received data
                 match self.build_and_send(Vec::new(), ACK) {
                     Ok(_) => println!("Acknowledged received data"),
                     Err(e) => eprintln!("Error sending ACK: {}", e),
-                }
-                self.read_buf.alert_ready();
+                } 
             }
             FIN => {} //Other dude wants to close the connection
             _ => eprintln!(
@@ -153,6 +128,16 @@ impl ConnectionSocket {
             ),
         }
         TcpState::Established
+    }
+
+    //UTILITIES
+    fn set_init_ack(&mut self, rem_seq_num: u32) {
+        //Set ack_num
+        self.ack_num = rem_seq_num.clone();
+        self.ack_num += 1; //Increment to be next expected value of sequence number
+        //Set Recv Buffer's initial remote sequence number
+        let mut read_buf = self.read_buf.get_buf();
+        read_buf.set_init_seq(rem_seq_num);
     }
 
     //
@@ -180,13 +165,14 @@ impl ConnectionSocket {
         self.ip_sender.send(pbasis)
     }
     fn build_packet(&self, payload: Vec<u8>, flags: u8) -> TcpPacket {
+        let window_size = { self.read_buf.get_buf().window() };
         let mut tcp_header = TcpHeader::new(
-            self.src_addr.port.clone(),
-            self.dst_addr.port.clone(),
+            self.src_addr.port,
+            self.dst_addr.port,
             self.seq_num,
-            self.win_size.load(Ordering::SeqCst),
+            window_size
         );
-        tcp_header.acknowledgment_number = self.ack_num.load(Ordering::SeqCst);
+        tcp_header.acknowledgment_number = self.ack_num;
         ConnectionSocket::set_flags(&mut tcp_header, flags);
         let src_ip = self.src_addr.ip.clone().octets();
         let dst_ip = self.dst_addr.ip.clone().octets();
@@ -335,7 +321,7 @@ impl ConnectionSocket {
 //SEND AND RECV BUFFERS
 //
 
-const MAX_MSG_SIZE: usize = 1480;
+const MAX_MSG_SIZE: usize = 1460; //+ 40 for header
 const BUFFER_CAPACITY: usize = 65535;
 
 #[derive(Debug)]
@@ -470,7 +456,7 @@ impl RecvBuf {
             circ_buffer: CircularBuffer::new(),
             early_arrivals: HashMap::new(),
             bytes_read: 0,
-            rem_init_seq: 0, //We don't know yet *shrug*
+            rem_init_seq: 0, //We don't know yet *shrug* - gets set by 
         }
     }
 
@@ -512,8 +498,8 @@ impl RecvBuf {
     pub fn window(&self) -> u16 {
         (self.circ_buffer.capacity() - self.circ_buffer.len()) as u16
     }
-    /// Set the sequence number
-    pub fn set_seq(&mut self, seq_num: u32) {
+
+    pub fn set_init_seq(&mut self, seq_num: u32) {
         self.rem_init_seq = seq_num;
     }
 }

@@ -4,6 +4,7 @@ use crate::prelude::*;
 pub enum TcpState {
     Listening, // Listener Socket constant state
     AwaitingRun, // Connection sockets upon creation, waiting to run
+    Initialized, //Connection socket initialized by listener before processing SYN packet
     SynSent, // Connection Socket after SYN, waiting for SYN/ACK
     SynRecvd, // Connection Socket state after receiving a SYN, should respond SYN/ACK
     Established, //TCP handshake complete - now both parties can send data

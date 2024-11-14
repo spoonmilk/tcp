@@ -60,24 +60,23 @@ impl SocketManager {
     /// 
     /// NOTE: The socket table is locked during this operation
     fn listener_recv(&mut self, port: u16, ip_head: Ipv4Header, tcp_pack: TcpPacket) -> () {
+        //Check that the packet is a SYN packet and drop if it isn't
+        if !has_only_flags(&tcp_pack.header, SYN) { return println!("Listener socket received non SYN packet for some reason") }
         //Find data about appropriate listener socket in the listener table
         let listener = self.listener_table.get_mut(&port).expect("Herm, listener table not synced up with socket table");
-        //Construct pending connection for incoming client
+        //Construct connection socket and pending connection for incoming client
         let src_addr = TcpAddress::new(Ipv4Addr::from(ip_head.destination), tcp_pack.header.destination_port);
         let dst_addr = TcpAddress::new(Ipv4Addr::from(ip_head.source), tcp_pack.header.source_port);
-        let state = Arc::new(RwLock::new(TcpState::SynRecvd)); //Always start in syn recved state when spawned by listener socket 
-        
-        // Clone arc of ip_sender, create new connection socket
+        let state = Arc::new(RwLock::new(TcpState::Initialized)); //Always start in Initialize state when spawned by listener socket 
         let ip_send = self.ip_sender.clone();
         let conn_sock = ConnectionSocket::new(state, src_addr.clone(), dst_addr.clone(), ip_send);
-
-        let mut sock_table = self.socket_table.write().unwrap();
         let pending_conn = PendingConn::new(conn_sock);
         //Decide whether to immediately start connection or stash it for later depending on whether the listener is accepting
         match listener.accepting {
             true => {
+                let mut sock_table = self.socket_table.write().unwrap();
                 let sock = pending_conn.start(&mut sock_table); //Technically, if we wanted to be fully faithful to a true socket API, we would set accepting back to false here, but this doesn't actually need to happen, so...
-                ConnectionSocket::first_syn_ack(sock, tcp_pack); //Sends SYN + ACK message
+                ConnectionSocket::handle_packet(sock, tcp_pack); //Sends SYN + ACK message
             }
             false => listener.pending_connections.push(pending_conn)
         }

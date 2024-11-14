@@ -60,7 +60,7 @@ impl HostBackend {
         let conn_dst_addr = TcpAddress::new(dst_vip, dst_port);
         let init_state = Arc::new(RwLock::new(TcpState::AwaitingRun));
         // TODO: REfactor after connectionsocket refactoring
-        let conn_sock = ConnectionSocket::new(init_state, conn_src_addr.clone(), conn_dst_addr.clone(), Arc::clone(&self.ip_sender), 0);
+        let conn_sock = ConnectionSocket::new(init_state, conn_src_addr.clone(), conn_dst_addr.clone(), Arc::clone(&self.ip_sender));
         let pending_conn = PendingConn::new(conn_sock);
         let mut socket_table = self.socket_table_mut();
         let sock = pending_conn.start(&mut socket_table);
