@@ -129,7 +129,6 @@ impl ConnectionSocket {
                     recv_buf.add(tpack.header.sequence_number, tpack.payload.clone()),
                     Ordering::SeqCst,
                 );
-
                 self.win_size.store(recv_buf.window(), Ordering::SeqCst); 
                 println!("new window size: {}", self.win_size.load(Ordering::SeqCst));
                 let mut send_buf = self.write_buf.get_buf();
@@ -414,7 +413,11 @@ impl SendBuf {
     } 
     //Acknowledges (drops) all sent bytes up to the one indicated by most_recent_ack
     fn ack_data(&mut self, most_recent_ack: u32) {
+        // Caclulate relative acknowledged data
         let relative_ack = most_recent_ack - (self.num_acked + self.our_init_seq + 1);
+        // Decrement nxt pointer to match dropped data - compensation for absence of una
+        self.nxt -= relative_ack as usize;
+        // Drain out acknowledged data
         self.circ_buffer.drain(..relative_ack as usize);
         self.num_acked += relative_ack;
     }
