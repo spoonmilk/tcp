@@ -4,6 +4,7 @@ use crate::utils::*;
 use std::sync::atomic::Ordering;
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32};
 use std::sync::Condvar;
+use std::time::{Duration, Instant};
 
 #[derive(Debug)]
 pub struct ConnectionSocket {
@@ -129,7 +130,7 @@ impl ConnectionSocket {
                     recv_buf.add(tpack.header.sequence_number, tpack.payload.clone()),
                     Ordering::SeqCst,
                 );
-                self.win_size.store(recv_buf.window(), Ordering::SeqCst); 
+                self.win_size.store(recv_buf.window(), Ordering::SeqCst);
                 println!("new window size: {}", self.win_size.load(Ordering::SeqCst));
                 let mut send_buf = self.write_buf.get_buf();
                 send_buf.update_window(recv_buf.window());
@@ -138,7 +139,7 @@ impl ConnectionSocket {
                 match self.build_and_send(Vec::new(), ACK) {
                     Ok(_) => println!("Acknowledged received data"),
                     Err(e) => eprintln!("Error sending ACK: {}", e),
-                } 
+                }
                 self.read_buf.alert_ready();
             }
             FIN => {} //Other dude wants to close the connection
@@ -254,7 +255,9 @@ impl ConnectionSocket {
         }
         terminate_send.store(true, Ordering::SeqCst);
 
-        thread_send_onwards.join().expect("Send onwards thread panicked");
+        thread_send_onwards
+            .join()
+            .expect("Send onwards thread panicked");
         bytes_sent as u16
     }
 
@@ -267,14 +270,14 @@ impl ConnectionSocket {
             let slf = slf.lock().unwrap();
             Arc::clone(&slf.write_buf)
         };
-        loop { 
+        loop {
             // Retrieve the next chunk of data to send
             let mut to_send: Vec<u8> = {
                 let mut writer = write_buf.buf.lock().unwrap();
                 writer.next_data()
             };
             if to_send.is_empty() {
-                if terminate_send.load(Ordering::SeqCst) { 
+                if terminate_send.load(Ordering::SeqCst) {
                     break;
                 } else {
                     let mut writer = write_buf.buf.lock().unwrap();
@@ -397,9 +400,9 @@ impl SendBuf {
             self.rem_window as usize,
             self.circ_buffer.len() - self.nxt,
             MAX_MSG_SIZE,
-        ]; 
+        ];
         // Obtain greatest (unintuitively, smallest) constraint
-        let greatest_constraint = constraints.iter().min().unwrap(); 
+        let greatest_constraint = constraints.iter().min().unwrap();
         let upper_bound = self.nxt + greatest_constraint;
         // Grab data, feed to sender
         let data: Vec<u8> = self
@@ -409,7 +412,7 @@ impl SendBuf {
             .collect();
         self.nxt = upper_bound;
         data
-    } 
+    }
     ///Acknowledges (drops) all sent bytes up to the one indicated by most_recent_ack
     fn ack_data(&mut self, most_recent_ack: u32) {
         // Caclulate relative acknowledged data
@@ -518,20 +521,82 @@ RTTVAR = (1 - BETA) * RTTVAR + BETA * ABS(SRTT - R')
 SUCCESSIVE:
 RTO = SRTT + (K * RTTVAR)
 
-*/
+CONSTANTS:
+- BETA = 1/4
+- ALPHA = 1/8
+- K = 4
 
-const MIN_RTO: u32 = 1; // Milliseconds
-const MAX_RTO: u32 = 100; // Milliseconds
-const ALPHA: f32 = 0.125; // Multiplier
-const BETA: f32 = 0.25; // Multiplier
-const K: u32 = 4; // Multiplier 
+*/
+// CONSTANTS
+const MIN_RTO: u64 = 1; // Milliseconds
+const MAX_RTO: u64 = 100; // Milliseconds
 
 pub struct RetransmissionTimer {
-    rto: Duration,             // RTO: retransmission timeout
-    srtt: Option<Duration>,    // Initially none, see above algo
-    rttvar: Option<Duration>,  // Initially none, see above algo
-    min_rto: Duration,         // Minimum RTO: 1ms for imp, 150-250ms for testing
-    max_rto: Duration,         // Maximum RTO: 100ms(?)
-    retransmission_count: u32, // Attempt counter ; stop at 3
-    time_since_resend: u32     // Should actually be a duration, created on startup with val 0 then updated at each retransmission
+    rto: Duration,              // RTO: retransmission timeout
+    srtt: Option<Duration>,     // Initially none, see above algo
+    rttvar: Option<Duration>,   // Initially none, see above algo
+    min_rto: Duration,          // Minimum RTO: 1ms for imp, 150-250ms for testing
+    max_rto: Duration,          // Maximum RTO: 100ms(?)
+    retransmission_count: u32,  // Attempt counter ; stop at 3
+    time_since_resend: Option<Instant>, // Created on startup with val 0 then updated at each retransmission ; RTT equivalent
 }
+impl RetransmissionTimer {
+    pub fn new() -> RetransmissionTimer {
+        RetransmissionTimer {
+            rto: Duration::from_millis(MIN_RTO),
+            srtt: None,
+            rttvar: None,
+            min_rto: Duration::from_millis(MIN_RTO),
+            max_rto: Duration::from_millis(MAX_RTO),
+            retransmission_count: 0,
+            time_since_resend: None,
+        }
+    }
+    fn update_rto(&mut self, measured_rtt: Duration) {
+        if let (Some(srtt), Some(rttvar)) = (self.srtt, self.rttvar) {
+            // Successive rtt algorithms ; see RFC 6298 2.3
+
+            // Since duration doesn't support abs, we fenagle it a bit
+            let delta = if measured_rtt > srtt {
+                measured_rtt - srtt
+            } else {
+                srtt - measured_rtt
+            };
+            self.rttvar = Some(rttvar * 3 / 4 + delta / 4);
+            self.srtt = Some(srtt * 7 / 8 + measured_rtt / 8);
+
+            // Update RTO with SRTT and RTTVAR
+            self.rto = self.srtt.unwrap() + self.rttvar.unwrap() * 4;
+            self.rto = self.rto.clamp(self.min_rto, self.max_rto);
+        } else {
+            // First rtt algorithm ; see RFC 6298 2.2
+            self.srtt = Some(measured_rtt);
+            self.rttvar = Some(measured_rtt / 2);
+            self.rto = self.srtt.unwrap() + (4 * self.rttvar.unwrap());
+        }
+    }
+    fn do_retransmission(&mut self) { 
+        self.retransmission_count += 1;
+        self.rto *= 2; // RFC 6298 (5.5) 
+    }
+    pub fn start_timer (&mut self) {
+        self.time_since_resend = Some(Instant::now());
+    }
+    pub fn is_expired (&mut self) -> bool {
+        if let Some(time_since_resend) = self.time_since_resend {
+            time_since_resend.elapsed() > self.rto
+        } else {
+            false
+        }
+    }
+    pub fn reset (&mut self) {
+        self.retransmission_count = 0;
+        self.rto = Duration::from_millis(MIN_RTO);
+        self.rttvar = None;
+        self.srtt = None;
+        self.time_since_resend = None;
+    }
+
+
+}
+
