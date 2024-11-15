@@ -294,6 +294,20 @@ impl ConnectionSocket {
         }
     }
 
+    fn run_timer(slf: Arc<Mutex<Self>>) -> () {
+        let mut retr_timer = RetransmissionTimer::new();
+        retr_timer.start_timer(); 
+        loop {
+            thread::sleep(retr_timer.rto); 
+            if retr_timer.is_expired() {
+                break; // Fail condition
+            }
+            retr_timer.do_retransmission();
+            // Logic for actually doing the retransmission
+        }
+    }
+    // TODO: Implement retransmission RTT calculation
+
     pub fn receive(slf: Arc<Mutex<Self>>, bytes: u16) -> Vec<u8> {
         let mut received = Vec::new();
         let read_buf = {
@@ -499,6 +513,7 @@ impl RecvBuf {
         self.rem_init_seq = seq_num;
     }
 }
+
 /* Algorithm for calculatating RTO and successive:
 
 SEE RFC 6298
@@ -527,6 +542,7 @@ CONSTANTS:
 - K = 4
 
 */
+
 // CONSTANTS
 const MIN_RTO: u64 = 1; // Milliseconds
 const MAX_RTO: u64 = 100; // Milliseconds
@@ -556,7 +572,7 @@ impl RetransmissionTimer {
         if let (Some(srtt), Some(rttvar)) = (self.srtt, self.rttvar) {
             // Successive rtt algorithms ; see RFC 6298 2.3
 
-            // Since duration doesn't support abs, we fenagle it a bit
+            // Since duration doesn't support abs, we finagle it a bit
             let delta = if measured_rtt > srtt {
                 measured_rtt - srtt
             } else {
@@ -565,7 +581,7 @@ impl RetransmissionTimer {
             self.rttvar = Some(rttvar * 3 / 4 + delta / 4);
             self.srtt = Some(srtt * 7 / 8 + measured_rtt / 8);
 
-            // Update RTO with SRTT and RTTVAR
+            // Update RTO with SRTT and RTTVAR ; More absolute val finagling
             self.rto = self.srtt.unwrap() + self.rttvar.unwrap() * 4;
             self.rto = self.rto.clamp(self.min_rto, self.max_rto);
         } else {
@@ -596,7 +612,5 @@ impl RetransmissionTimer {
         self.srtt = None;
         self.time_since_resend = None;
     }
-
-
 }
 
