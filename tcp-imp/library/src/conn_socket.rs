@@ -1,10 +1,12 @@
 use crate::prelude::*;
 use crate::tcp_utils::*;
 use crate::utils::*;
-use std::sync::atomic::Ordering;
-use std::sync::atomic::AtomicBool;
-use std::sync::Condvar;
-use std::time::{Duration, Instant};
+use crate::send_recv_utils::*;
+
+//TODO:
+//Get post ZWP functionality to work better (put more inside send_onwards)
+//Fix bug where we can't send packets that exceed remote window size
+
 
 #[derive(Debug)]
 pub struct ConnectionSocket {
@@ -43,8 +45,7 @@ impl ConnectionSocket {
     //Sending first messages in handshake
     pub fn first_syn(slf: Arc<Mutex<Self>>) {
         let mut slf = slf.lock().unwrap();
-        slf.build_and_send(Vec::new(), SYN)
-            .expect("Error sending to IpDaemon");
+        slf.send_flags(SYN);
         let mut state = slf.state.write().unwrap();
         *state = TcpState::SynSent;
     }
@@ -53,12 +54,15 @@ impl ConnectionSocket {
     //HANDLING INCOMING PACKETS
     //
     pub fn handle_packet(slf: Arc<Mutex<Self>>, tpack: TcpPacket) {
+        //let slf_clone = Arc::clone(&slf); //Needed for zero window probing
         let mut slf = slf.lock().unwrap();
         //Universal packet reception actions
-        { //Update window size
+        if has_flags(&tpack.header, RST) { panic!("Received RST packet") } //Panics if RST flag received
+        { //Update (remote) window size
             let mut write_buf = slf.write_buf.get_buf();
             write_buf.update_window(tpack.header.window_size);
         }
+        //if tpack.header.window_size == 0 { Self::zero_window_probe(slf_clone) } //Sends probe packet if window is zero
         //State specific packet recpetion actions
         let new_state = {
             let slf_state = slf.state.read().unwrap();
@@ -80,8 +84,7 @@ impl ConnectionSocket {
             //Deal with receiving first sequence number of TCP partner
             self.set_init_ack(tpack.header.sequence_number);
             //Send response (SYN + ACK in this case) and change state
-            self.build_and_send(Vec::new(), SYN | ACK)
-                .expect("Error sending TCP packet to IP Daemon");
+            self.send_flags(SYN | ACK);
             return TcpState::SynRecvd;
         }
         panic!("Hmm, process_syn was called for a packet that was not SYN - check listener_recv()")
@@ -91,8 +94,7 @@ impl ConnectionSocket {
             //Deal with receiving first sequence number of TCP partner
             self.set_init_ack(tpack.header.sequence_number);
             //Send response (ACK in this case) and change state
-            self.build_and_send(Vec::new(), ACK)
-                .expect("Error sending TCP packet to IP Daemon");
+            self.send_flags(ACK);
             return TcpState::Established;
         }
         TcpState::SynSent
@@ -106,6 +108,7 @@ impl ConnectionSocket {
             ACK if tpack.payload.len() == 0 => { //Received an acknowledgement of data sent
                 let mut send_buf = self.write_buf.get_buf();
                 send_buf.ack_data(tpack.header.acknowledgment_number);
+                self.write_buf.alert_ready();
             }
             ACK => { //Received data
                 //Add data to Recv Buffer
@@ -116,10 +119,8 @@ impl ConnectionSocket {
                 //Let any waiting receive() thread know that data was just added to the receive buffer
                 self.read_buf.alert_ready();
                 //Send acknowledgement for received data
-                match self.build_and_send(Vec::new(), ACK) {
-                    Ok(_) => println!("Acknowledged received data"),
-                    Err(e) => eprintln!("Error sending ACK: {}", e),
-                } 
+                self.send_flags(ACK);
+                println!("Acknowledged received data");
             }
             FIN => {} //Other dude wants to close the connection
             _ => eprintln!(
@@ -140,28 +141,47 @@ impl ConnectionSocket {
         read_buf.set_init_seq(rem_seq_num);
     }
 
+    //ZERO WINDOW PROBING
+    /*
+    fn zero_window_probe(slf: Arc<Mutex<Self>>) {
+        thread::sleep(Duration::from_millis(500)); //Wait an arbitrary amount of time in hopes partner's window opens up
+        let mut slf = slf.lock().unwrap();
+        let mut send_buf = slf.write_buf.wait();
+        match send_buf.probe_data() {
+            Some(data) => { slf.build_and_send(data, ACK).expect("Error sending to partner") }
+            None => panic!("Received nothing from probe_data() - shouldn't of happened")
+        }
+
+    }*/
+
+
     //
     //BUILDING AND SENDING PACKETS
     //
 
+    fn send_flags(&mut self, flags: u8) {
+        self.build_and_send(Vec::new(), flags).expect("Error sending flag packet to partner");
+        if (flags & SYN) != 0 || (flags & FIN) != 0 { self.seq_num += 1 }
+    }
+
+    fn send_data(&mut self, data: Vec<u8>) {
+        let data_length = data.len();
+        self.build_and_send(data, ACK).expect("Error sending data packet to partner");
+        self.seq_num += data_length as u32;
+    }
+
+    fn send_probe(&self, data: Vec<u8>) {
+        self.build_and_send(data, ACK).expect("Error sending probe packe to partner")
+        //Don't adjust sequence number for probes
+    }
+
     fn build_and_send(
-        &mut self,
+        &self,
         payload: Vec<u8>,
         flags: u8,
     ) -> result::Result<(), SendError<PacketBasis>> {
-        let payload_len = payload.len();
         let new_pack = self.build_packet(payload, flags);
         let pbasis = self.packet_basis(new_pack);
-        let increment_seq = if payload_len == 0 {
-            if (flags & SYN) != 0 || (flags & FIN) != 0 {
-                1
-            } else {
-                0
-            }
-        } else {
-            payload_len
-        };
-        self.seq_num += increment_seq as u32;
         self.ip_sender.send(pbasis)
     }
     fn build_packet(&self, payload: Vec<u8>, flags: u8) -> TcpPacket {
@@ -215,6 +235,10 @@ impl ConnectionSocket {
         }
     }
 
+    //
+    //SENDING AND RECVING
+    //
+
     // Loops through sending packets of max size 1500 bytes until everything's been sent
     pub fn send(slf: Arc<Mutex<Self>>, mut to_send: Vec<u8>) -> u16 {
         // Condvar for checking if the buffer has been updated
@@ -232,11 +256,14 @@ impl ConnectionSocket {
             .expect("Could not spawn thread");
 
         //Continuously wait for there to be space in the buffer and add data till buffer is full
+        let write_buf = {
+            let slf = slf.lock().unwrap();
+            Arc::clone(&slf.write_buf)
+        };
         let mut bytes_sent = 0;
         while !to_send.is_empty() {
             //Wait till send_onwards says you can access slf now
-            let slf = slf.lock().unwrap();
-            let mut writer = slf.write_buf.wait();
+            let mut writer = write_buf.wait();
             let old_len = to_send.len();
             to_send = writer.fill_with(to_send);
             bytes_sent += old_len - to_send.len();
@@ -251,35 +278,52 @@ impl ConnectionSocket {
         bytes_sent as u16
     }
 
-    fn send_onwards(
-        slf: Arc<Mutex<Self>>,
-        buf_update: Arc<Condvar>,
-        terminate_send: Arc<AtomicBool>,
-    ) -> () {
+    fn send_onwards(slf: Arc<Mutex<Self>>, buf_update: Arc<Condvar>, terminate_send: Arc<AtomicBool>) -> () {
         let write_buf = {
             let slf = slf.lock().unwrap();
             Arc::clone(&slf.write_buf)
         };
-        loop {
-            // Retrieve the next chunk of data to send
-            let mut to_send: Vec<u8> = {
-                let mut writer = write_buf.buf.lock().unwrap();
-                writer.next_data()
-            };
-            if to_send.is_empty() {
-                if terminate_send.load(Ordering::SeqCst) {
-                    break;
-                } else {
-                    let mut writer = write_buf.buf.lock().unwrap();
-                    writer = buf_update.wait(writer).unwrap();
-                    to_send = writer.next_data();
+        let mut snd_state = SendState::Sending;
+        loop { 
+            let to_send = match snd_state {
+                SendState::Sending => {//Sending like usual
+                    let mut writer = write_buf.get_buf();
+                    let nxt_data = writer.next_data();
+                    if let NextData::ZeroWindow(_) = nxt_data { thread::sleep(Duration::from_millis(5000)) }
+                    nxt_data
                 }
-            }
-            // Send data over the network
-            let mut slf = slf.lock().unwrap();
-            if let Err(e) = slf.build_and_send(to_send, ACK) {
-                eprintln!("Error sending data: {}", e);
-                break; // Exit the loop if there's an error
+                SendState::Probing => {//Remote window was empty last we know, so wait then send the probe packet
+                    thread::sleep(Duration::from_millis(5000));
+                    let mut writer = write_buf.get_buf();
+                    let nxt_data = writer.next_data();
+                    if let NextData::Data(_) | NextData::NoData  = nxt_data {
+                        let mut slf = slf.lock().unwrap();
+                        slf.seq_num += 1; //Account for probe packet now successfully transmitted
+                    }
+                    nxt_data
+                }
+                SendState::Waiting => {//Buffer was empty last time we checked, so we check to see if we're done sending, and if not, wait till we receive and update 
+                    if terminate_send.load(Ordering::SeqCst) { break; }
+                    let mut writer = write_buf.get_buf();
+                    writer = buf_update.wait(writer).unwrap();
+                    let nxt_data = writer.next_data();
+                    if let NextData::ZeroWindow(_) = nxt_data { thread::sleep(Duration::from_millis(5000)) }
+                    nxt_data
+                }
+            };
+            match to_send {
+                NextData::Data(data) => {
+                    let mut slf = slf.lock().unwrap();
+                    slf.send_data(data);
+                    snd_state = SendState::Sending
+                }
+                NextData::ZeroWindow(probe) => {
+                    //thread::sleep(Duration::from_millis(5000));
+                    let slf = slf.lock().unwrap();
+                    slf.send_probe(probe);
+                    snd_state = SendState::Probing
+                }
+                NextData::NoData => snd_state = SendState::Waiting,
             }
         }
     }
@@ -299,209 +343,19 @@ impl ConnectionSocket {
     // TODO: Implement retransmission RTT calculation
 
     pub fn receive(slf: Arc<Mutex<Self>>, bytes: u16) -> Vec<u8> {
-        let mut received = Vec::new();
         let read_buf = {
             let slf = slf.lock().unwrap();
             Arc::clone(&slf.read_buf)
         };
-        loop {
-            let remaining_amt = bytes - (received.len() as u16);
-            if remaining_amt == 0 {
-                // Upon receiving all data, respond with an acknowledgment
-                break received;
-            }
-            let mut recv_buf = read_buf.wait();
-            let just_received = recv_buf.read(remaining_amt);
-            received.extend(just_received);
-        }
+        let mut recv_buf: std::sync::MutexGuard<'_, RecvBuf> = read_buf.wait();
+        recv_buf.read(bytes)
     }
 }
 
-//
-//SEND AND RECV BUFFERS
-//
-
-const MAX_MSG_SIZE: usize = 1460; //+ 40 for header
-const BUFFER_CAPACITY: usize = 65535;
-
-#[derive(Debug)]
-struct SyncBuf<T: TcpBuffer> {
-    ready: Condvar,
-    buf: Mutex<T>,
-}
-
-impl<T: TcpBuffer> SyncBuf<T> {
-    pub fn new(buf: T) -> SyncBuf<T> {
-        SyncBuf {
-            ready: Condvar::new(),
-            buf: Mutex::new(buf),
-        }
-    }
-    pub fn alert_ready(&self) {
-        self.ready.notify_one();
-    }
-    pub fn wait(&self) -> std::sync::MutexGuard<T> {
-        let mut buf = self.buf.lock().unwrap();
-        while !buf.ready() {
-            buf = self.ready.wait(buf).unwrap();
-        }
-        buf
-    }
-    pub fn get_buf(&self) -> std::sync::MutexGuard<T> {
-        self.buf.lock().unwrap()
-    }
-}
-
-trait TcpBuffer {
-    fn ready(&self) -> bool;
-}
-
-#[derive(Debug)]
-struct SendBuf {
-    circ_buffer: CircularBuffer<BUFFER_CAPACITY, u8>,
-    //una: usize, Don't need, b/c una will always be 0 technically
-    nxt: usize, // Pointer to next byte to be sent ; NOTE, UPDATE AS BYTES DRAINED
-    //lbw: usize Don't need b/c lbw will always be circ_buffer.len() technically
-    rem_window: u16,
-    num_acked: u32,
-    our_init_seq: u32,
-}
-
-impl TcpBuffer for SendBuf {
-    //Ready when buffer is not full
-    fn ready(&self) -> bool {
-        self.circ_buffer.len() != self.circ_buffer.capacity()
-    }
-}
-
-impl SendBuf {
-    fn new(our_init_seq: u32) -> SendBuf {
-        SendBuf {
-            circ_buffer: CircularBuffer::new(),
-            nxt: 0,
-            rem_window: 0,
-            num_acked: 0,
-            our_init_seq, //OUR
-        }
-    }
-    ///Fills up the circular buffer with the data in filler until the buffer is full,
-    ///then returns the original input filler vector drained of the values added to the circular buffer
-    fn fill_with(&mut self, mut filler: Vec<u8>) -> Vec<u8> {
-        let available_spc = self.circ_buffer.capacity() - self.circ_buffer.len();
-        let to_add = filler
-            .drain(..std::cmp::min(available_spc, filler.len()))
-            .collect::<Vec<u8>>();
-
-        self.circ_buffer.extend_from_slice(&to_add[..]);
-        filler
-    }
-    ///Returns a vector of data to be put in the next TcpPacket to send, taking into account the input window size of the receiver
-    ///This vector contains as many bytes as possible up to the maximum payload size (1500)
-    fn next_data(&mut self) -> Vec<u8> {
-        //Takes into account the three constraints on how much data can be sent in the next TcpPacket (window size, maximum message size, and amount of data in the buffer)
-        //and finds the appropriate
-        let constraints = vec![
-            self.rem_window as usize,
-            self.circ_buffer.len() - self.nxt,
-            MAX_MSG_SIZE,
-        ];
-        // Obtain greatest (unintuitively, smallest) constraint
-        let greatest_constraint = constraints.iter().min().unwrap();
-        let upper_bound = self.nxt + greatest_constraint;
-        // Grab data, feed to sender
-        let data: Vec<u8> = self
-            .circ_buffer
-            .range(self.nxt..upper_bound)
-            .cloned()
-            .collect();
-        self.nxt = upper_bound;
-        data
-    }
-    ///Acknowledges (drops) all sent bytes up to the one indicated by most_recent_ack
-    fn ack_data(&mut self, most_recent_ack: u32) {
-        // Caclulate relative acknowledged data
-        let relative_ack = most_recent_ack - (self.num_acked + self.our_init_seq + 1);
-        // Decrement nxt pointer to match dropped data ; compensation for absence of una
-        self.nxt -= relative_ack as usize;
-        // Drain out acknowledged data
-        self.circ_buffer.drain(..relative_ack as usize);
-        self.num_acked += relative_ack;
-    }
-    ///Updates the SendBuf's internal tracker of how many more bytes can be sent before filling the reciever's window
-    fn update_window(&mut self, new_window: u16) {
-        self.rem_window = new_window;
-    }
-}
-
-#[derive(Debug)]
-struct RecvBuf {
-    circ_buffer: CircularBuffer<BUFFER_CAPACITY, u8>,
-    //lbr: usize Don't need, lbr will always be 0
-    //nxt: usize Don't need, nxt will always be circ_buffer.len()
-    early_arrivals: HashMap<u32, Vec<u8>>,
-    bytes_read: u32,
-    rem_init_seq: u32,
-}
-
-impl TcpBuffer for RecvBuf {
-    //Ready when buffer has some elements
-    fn ready(&self) -> bool {
-        self.circ_buffer.len() != 0
-    }
-}
-
-impl RecvBuf {
-    pub fn new() -> RecvBuf {
-        RecvBuf {
-            circ_buffer: CircularBuffer::new(),
-            early_arrivals: HashMap::new(),
-            bytes_read: 0,
-            rem_init_seq: 0, //We don't know yet *shrug* - gets set by 
-        }
-    }
-
-    ///Returns a vector of in-order data drained from the circular buffer, containing a number of elements equal to the specified amount
-    ///or to the total amount of in-order data ready to go in the buffer
-    pub fn read(&mut self, bytes: u16) -> Vec<u8> {
-        let constraints = vec![bytes as usize, self.circ_buffer.len()];
-        let greatest_constraint = constraints.iter().min().unwrap();
-        let data: Vec<u8> = self.circ_buffer.drain(..greatest_constraint).collect();
-        self.bytes_read += data.len() as u32;
-        data
-    }
-
-    ///Adds the input data segment to the buffer if its sequence number is the next expected one. If not, inserts the segment into the
-    ///early arrival hashmap. If data is ever added to the buffer, the early arrivals hashmap is checked to see if it contains the
-    ///following expected segment, and the cycle continues until there are no more segments to add to the buffer
-    ///Returns the next expected sequence number (the new ack number)
-    pub fn add(&mut self, seq_num: u32, data: Vec<u8>) -> u32 {
-        println!(
-            "sequence number: {}\nexpected sequence number: {}",
-            seq_num,
-            self.expected_seq()
-        );
-        if seq_num == self.expected_seq() {
-            self.circ_buffer.extend_from_slice(&data[..]);
-            while let Some(next_data) = self.early_arrivals.remove(&self.expected_seq()) {
-                self.circ_buffer.extend_from_slice(&next_data[..]);
-            }
-        } else {
-            self.early_arrivals.insert(seq_num, data);
-        }
-        self.expected_seq()
-    }
-    ///Returns the next expected sequence number - only used privately, self.add() returns next sequence number too for public use
-    fn expected_seq(&self) -> u32 {
-        self.rem_init_seq + self.bytes_read + ((self.circ_buffer.len() + 1) as u32)
-    }
-    ///Returns the buffer's current window size
-    pub fn window(&self) -> u16 {
-        (self.circ_buffer.capacity() - self.circ_buffer.len()) as u16
-    }
-
-    pub fn set_init_seq(&mut self, seq_num: u32) {
-        self.rem_init_seq = seq_num;
-    }
+enum SendState {
+    Sending,
+    Probing, 
+    Waiting
 }
 
 /* Algorithm for calculatating RTO and successive:

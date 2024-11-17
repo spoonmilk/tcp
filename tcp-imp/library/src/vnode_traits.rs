@@ -1,6 +1,8 @@
 use crate::prelude::*;
 use crate::utils::*;
 use std::any::Any;
+use rand::seq::IteratorRandom;
+use rand::thread_rng;
 
 pub trait VnodeBackend {
     //Getters
@@ -168,6 +170,7 @@ pub trait VnodeIpDaemon {
         // Match proper interface to find src ip
         let src_ip = match self.proper_interface(&pb.dst_ip) {
             Ok(Some((inter, _))) => self.interface_reps().get(&inter).unwrap().v_net.addr(),
+            Ok(None) => self.interface_reps().iter().choose(&mut thread_rng()).expect("No interfaces?").1.v_net.addr(),
             _ => {
                 panic!("Failed to build packet ; fuck")
             }

@@ -49,12 +49,7 @@ impl HostBackend {
     }
     pub fn listen(&self, port: u16) -> () { self.socket_manager.lock().unwrap().listen(port); }
     pub fn accept(&self, port: u16) -> () { self.socket_manager.lock().unwrap().accept(port); }
-    pub fn connect(&self, ip_addr: Ipv4Addr, port: u16) -> () {
-        let socket_table = self.socket_table();
-        if let None = Self::find_conn_socket(socket_table, &ip_addr, &port) {
-            self.init_new_conn(ip_addr, port);
-        }
-    }
+    pub fn connect(&self, ip_addr: Ipv4Addr, port: u16) -> () { self.init_new_conn(ip_addr, port); }
     fn init_new_conn(&self, dst_vip: Ipv4Addr, dst_port: u16) -> () {
         let conn_src_addr = self.unused_tcp_addr();
         let conn_dst_addr = TcpAddress::new(dst_vip, dst_port);
