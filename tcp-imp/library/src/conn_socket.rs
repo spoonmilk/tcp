@@ -141,20 +141,6 @@ impl ConnectionSocket {
         read_buf.set_init_seq(rem_seq_num);
     }
 
-    //ZERO WINDOW PROBING
-    /*
-    fn zero_window_probe(slf: Arc<Mutex<Self>>) {
-        thread::sleep(Duration::from_millis(500)); //Wait an arbitrary amount of time in hopes partner's window opens up
-        let mut slf = slf.lock().unwrap();
-        let mut send_buf = slf.write_buf.wait();
-        match send_buf.probe_data() {
-            Some(data) => { slf.build_and_send(data, ACK).expect("Error sending to partner") }
-            None => panic!("Received nothing from probe_data() - shouldn't of happened")
-        }
-
-    }*/
-
-
     //
     //BUILDING AND SENDING PACKETS
     //
