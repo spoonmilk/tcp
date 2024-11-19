@@ -18,6 +18,7 @@ pub struct HostBackend {
     pub socket_table: Arc<RwLock<SocketTable>>, //Just pub for REPL - once IpHandler is made by config this goes away
     pub socket_manager: Arc<Mutex<SocketManager>>, //Just pub for REPL - once IpHandler is made by config this goes away
     local_ip: Ipv4Addr,
+    closed_sender: Arc<Sender<SocketId>>,
     ip_sender: Arc<Sender<PacketBasis>>
 }
 
@@ -33,9 +34,13 @@ impl HostBackend {
     pub fn new(interface_reps: Arc<RwLock<InterfaceTable>>, forwarding_table: Arc<RwLock<ForwardingTable>>, socket_table: Arc<RwLock<SocketTable>>, ip_sender: Sender<PacketBasis>) -> HostBackend {
         let local_ip = interface_reps.read().unwrap().get("if0").expect("Assumed that if0 would exist").v_ip.clone(); //IDEALLY, THIS IS NOT DONE THIS WAY
         let ip_sender = Arc::new(ip_sender);
-        let socket_manager =  SocketManager::new(Arc::clone(&socket_table), Arc::clone(&ip_sender));
+        let (closed_send, closed_recv) = channel::<SocketId>();
+        let closed_sender = Arc::new(closed_send);
+        let socket_manager =  SocketManager::new(Arc::clone(&socket_table), Arc::clone(&closed_sender), Arc::clone(&ip_sender));
         let socket_manager = Arc::new(Mutex::new(socket_manager));
-        HostBackend { interface_reps, forwarding_table, socket_table, socket_manager, local_ip, ip_sender }
+        let socket_table_clone = Arc::clone(&socket_table);
+        thread::spawn(move || Self::check_closed(socket_table_clone, closed_recv));
+        HostBackend { interface_reps, forwarding_table, socket_table, socket_manager, local_ip, closed_sender, ip_sender }
     }
     pub fn socket_table(&self) -> RwLockReadGuard<SocketTable> { self.socket_table.read().unwrap() }
     fn socket_table_mut(&self) -> RwLockWriteGuard<SocketTable> { self.socket_table.write().unwrap() }
@@ -55,7 +60,7 @@ impl HostBackend {
         let conn_dst_addr = TcpAddress::new(dst_vip, dst_port);
         let init_state = Arc::new(RwLock::new(TcpState::AwaitingRun));
         // TODO: REfactor after connectionsocket refactoring
-        let conn_sock = ConnectionSocket::new(init_state, conn_src_addr.clone(), conn_dst_addr.clone(), Arc::clone(&self.ip_sender));
+        let conn_sock = ConnectionSocket::new(init_state, conn_src_addr.clone(), conn_dst_addr.clone(), Arc::clone(&self.closed_sender), Arc::clone(&self.ip_sender));
         let pending_conn = PendingConn::new(conn_sock);
         let mut socket_table = self.socket_table_mut();
         let sock = pending_conn.start(&mut socket_table); 
@@ -102,6 +107,39 @@ impl HostBackend {
         };
         let data = ConnectionSocket::receive(sock, bytes);
         Ok(data)
+    }
+    pub fn close(&self, sid: SocketId) -> Result<()> {
+        match self.socket_table().get(&sid) {
+            Some(SocketEntry::Connection(ent)) => self.close_connection(sid, ent),
+            Some(SocketEntry::Listener(ent)) => self.close_listener(ent),
+            None => return Err(Error::new(ErrorKind::InvalidInput, "Input socket ID does not match that of any sockets"))
+        }
+        Ok(())
+    }
+    fn close_connection(&self, sid: SocketId, conn_ent: &ConnectionEntry) {
+        //Run close on the socket
+        let sock = Arc::clone(&conn_ent.sock);
+        let (send_signal, recv_signal) = channel::<()>();
+        ConnectionSocket::close(sock);
+        //Spawn thread to remove socket from the socket table when it enters the CLOSED state 
+        let socket_table = Arc::clone(&self.socket_table);
+        thread::spawn(move || Self::remove_sock(socket_table, sid, recv_signal));
+    }
+    fn remove_sock(socket_table: Arc<RwLock<SocketTable>>, sid: SocketId, recv_signal: Receiver<()>) -> () {
+        recv_signal.recv().unwrap();
+        let mut sock_table = socket_table.write().unwrap();
+        sock_table.remove(&sid).expect("Socket Id doesn't exist within the table... possible synchronization issue?");
+    }
+    fn close_listener(&self, lst_ent: &ListenEntry) {
+        let mut socket_manager = self.socket_manager.lock().unwrap();
+        socket_manager.listener_close(lst_ent);
+    }
+    fn check_closed(socket_table: Arc<RwLock<SocketTable>>, closed_recv: Receiver<SocketId>) {
+        loop {
+            let sid = closed_recv.recv().unwrap();
+            let mut sock_table = socket_table.write().unwrap();
+            sock_table.remove(&sid).expect("Socket Id to remove doesn't exist within the table... Hmmmmm...");
+        }
     }
 }
 

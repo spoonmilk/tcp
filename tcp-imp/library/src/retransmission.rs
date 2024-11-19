@@ -32,7 +32,7 @@ CONSTANTS:
 
 // CONSTANTS
 const MIN_RTO: u64 = 1; // Milliseconds
-const MAX_RTO: u64 = 100; // Milliseconds
+pub const MAX_RTO: u64 = 100; // Milliseconds
 
 #[derive(Debug)]
 pub struct RetransmissionTimer {

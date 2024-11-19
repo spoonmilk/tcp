@@ -3,7 +3,7 @@ use crate::utils::*;
 use crate::tcp_utils::*;
 use crate::sockman_utils::*;
 use crate::socket_manager::SocketManager;
-use crate::conn_socket::*;
+use crate::conn_socket::ConnectionSocket;
 
 pub struct IpHandler {
     socket_table: Arc<RwLock<SocketTable>>,

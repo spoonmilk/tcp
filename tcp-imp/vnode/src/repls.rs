@@ -34,6 +34,7 @@ impl VnodeRepl<HostBackend> for HostRepl {
             ("r".to_string(), CommandData { handler: Self::wrap_host_handler(Self::r_handler), num_args: NumArgs::Exactly(2) }),
             ("sf".to_string(), CommandData { handler: Self::wrap_host_handler(Self::sf_handler), num_args: NumArgs::Exactly(3) }),
             ("rf".to_string(), CommandData { handler: Self::wrap_host_handler(Self::rf_handler), num_args: NumArgs::Exactly(2) }),
+            ("cl".to_string(), CommandData { handler: Self::wrap_host_handler(Self::cl_handler), num_args: NumArgs::Exactly(1) })
         ];
         let mut all_commands = self.get_base_commands();
         all_commands.append(&mut custom_commands);
@@ -165,6 +166,12 @@ impl HostRepl {
         //Calling backend.tcp_recv() and waiting to receive 1kb
         //Writing this data it into the file
         //Waits for sender to close the connection
+    }
+    pub fn cl_handler(backend: &HostBackend, args: Vec<String>) -> () {
+        //Sanitize input
+        let sid = if let Ok(sid) = args[0].parse::<SocketId>() { sid } else { return println!("Input socket ID {} invalid", args[0]) };
+        //Make the backend close that socket
+        backend.close(sid);
     }
     fn wrap_host_handler<F>(f: F) -> CommandHandler
     where

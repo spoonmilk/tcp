@@ -55,13 +55,17 @@ impl PendingConn {
     /// Takes in a pending connection and adds it to the SocketTable before returning a pointer to that socket
     pub fn start(self, socket_table: &mut RwLockWriteGuard<SocketTable>) -> Arc<Mutex<ConnectionSocket>> {
         //Create entry on socket table and add it
-        let sid = socket_table.len() as SocketId;
+        let sid = socket_table.len() as SocketId; //TODO: Change this to use an internal counter
         let src_addr = (&self.sock.src_addr).clone();
         let dst_addr = (&self.sock.dst_addr).clone();
         let state = Arc::clone(&self.sock.state);
         // let sock = self.sock.run();
         let sock = Arc::new(Mutex::new(self.sock));
+        ConnectionSocket::set_sid(Arc::clone(&sock), sid); //Socket needs to know its own ID
         let ret_clone = Arc::clone(&sock);
+        // Spawn thread for timeouts
+        let time_clone = Arc::clone(&sock);
+        thread::spawn(move || { ConnectionSocket::time_check(time_clone); });
         let ent = ConnectionEntry { src_addr, dst_addr, state, sock };
         let ent = SocketEntry::Connection(ent);
         socket_table.insert(sid, ent);
