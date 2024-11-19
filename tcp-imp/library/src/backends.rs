@@ -58,7 +58,7 @@ impl HostBackend {
         let conn_sock = ConnectionSocket::new(init_state, conn_src_addr.clone(), conn_dst_addr.clone(), Arc::clone(&self.ip_sender));
         let pending_conn = PendingConn::new(conn_sock);
         let mut socket_table = self.socket_table_mut();
-        let sock = pending_conn.start(&mut socket_table);
+        let sock = pending_conn.start(&mut socket_table); 
         ConnectionSocket::first_syn(sock); //Sends SYN message to start handshaked
     }
     /// Generates a new unused TCP address on the local IP

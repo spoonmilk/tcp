@@ -17,7 +17,7 @@ pub struct ConnectionSocket {
     ack_num: u32, //Edited every time a packet is received (first_syn_ack(), process_syn_ack(), establish_handler()) and viewed in build_packet()
     read_buf: Arc<SyncBuf<RecvBuf>>,
     write_buf: Arc<SyncBuf<SendBuf>>,
-    retr_timer: RetransmissionTimer,
+    retr_timer: Arc<Mutex<RetransmissionTimer>>,
     retr_queue: Arc<Mutex<RetransmissionQueue>>
 }
 
@@ -40,9 +40,30 @@ impl ConnectionSocket {
             ack_num: 0, //We don't know what the ack number should be yet - in some sense, self.set_init_ack() finishes the initialization of the socket
             read_buf: Arc::new(SyncBuf::new(RecvBuf::new())),
             write_buf: Arc::new(SyncBuf::new(SendBuf::new(seq_num))),
-            retr_timer: RetransmissionTimer::new(),
+            retr_timer: Arc::new(Mutex::new(RetransmissionTimer::new())),
             retr_queue: Arc::new(Mutex::new(RetransmissionQueue::new()))
         }
+    }
+    pub fn run(self) -> Arc<Mutex<Self>> {
+        let socket = Arc::new(Mutex::new(self));
+        let time_clone = Arc::clone(&socket);
+        thread::spawn(move || Self::time_check(time_clone));
+        socket
+    } 
+    /// Periodically does checking/elimination/retransmission from the queue and timer
+    pub fn time_check(slf: Arc<Mutex<Self>>) {
+        let mut rto = {
+            let slf = slf.lock().unwrap();
+            let retr_timer = slf.retr_timer.lock().unwrap();
+            retr_timer.rto
+        };
+        loop {
+            thread::sleep(rto);
+            let mut slf = slf.lock().unwrap();
+            slf.check_timeouts();
+            let retr_timer = slf.retr_timer.lock().unwrap();
+            rto = retr_timer.rto;
+        } 
     }
 
     //Sending first messages in handshake
@@ -131,8 +152,9 @@ impl ConnectionSocket {
                     let mut retr_queue = self.retr_queue.lock().unwrap();
                     // Remove acknowledged packets from queue
                     if let Some(measured_rtt) = retr_queue.calculate_rtt(new_ack) {
-                        self.retr_timer.update_rto(measured_rtt);
-                        self.retr_timer.retransmission_count = 0;
+                        let mut retr_timer = self.retr_timer.lock().unwrap();
+                        retr_timer.update_rto(measured_rtt);
+                        retr_timer.retransmission_count = 0;
                     }
                     retr_queue.remove_acked_segments(new_ack);
                 }
@@ -366,10 +388,12 @@ impl ConnectionSocket {
         let mut recv_buf: std::sync::MutexGuard<'_, RecvBuf> = read_buf.wait();
         recv_buf.read(bytes)
     }
-
     /// Method to check for timed-out segments
-    pub fn check_timeouts(&mut self) {
-        let current_rto = self.retr_timer.rto;
+    pub fn check_timeouts(&mut self) { 
+        let current_rto = { 
+            let retr_timer = self.retr_timer.lock().unwrap();
+            retr_timer.rto
+        };
         let timed_out_segments = { 
             let mut retr_queue = self.retr_queue.lock().unwrap();
             retr_queue.get_timed_out_segments(current_rto) 
@@ -381,7 +405,10 @@ impl ConnectionSocket {
                 self.send_segment(segment.seq_num, segment.payload.clone(), segment.flags);
             }
             // Update retransmission timer on timeout
-            self.retr_timer.do_retransmission();
+            {
+                let mut retr_timer = self.retr_timer.lock().unwrap();
+                retr_timer.do_retransmission();
+            }
         }
     }
     fn send_segment(&mut self, seq_num: u32, payload: Vec<u8>, flags: u8) {

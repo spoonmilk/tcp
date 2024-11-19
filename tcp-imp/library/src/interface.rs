@@ -30,7 +30,7 @@ impl Interface {
         let sender = chan.send;
         let receiver = chan.recv;
         thread::spawn(move || Interface::node_listen(receiver, slf_arc1));
-        Interface::ether_listen( sender, slf_arc2);
+        Interface::ether_listen(sender, slf_arc2);
     }
     fn node_listen(receiver: Receiver<InterCmd>, slf: Arc<Interface>) -> () {
         loop {

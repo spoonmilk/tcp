@@ -59,7 +59,7 @@ impl PendingConn {
         let src_addr = (&self.sock.src_addr).clone();
         let dst_addr = (&self.sock.dst_addr).clone();
         let state = Arc::clone(&self.sock.state);
-        let sock = Arc::new(Mutex::new(self.sock));
+        let sock = self.sock.run();
         let ret_clone = Arc::clone(&sock);
         let ent = ConnectionEntry { src_addr, dst_addr, state, sock };
         let ent = SocketEntry::Connection(ent);
