@@ -1,12 +1,11 @@
 use crate::prelude::*;
+use crate::send_recv_utils::*;
 use crate::tcp_utils::*;
 use crate::utils::*;
-use crate::send_recv_utils::*;
-
+use crate::retransmission::*;
 //TODO:
 //Get post ZWP functionality to work better (put more inside send_onwards)
 //Fix bug where we can't send packets that exceed remote window size
-
 
 #[derive(Debug)]
 pub struct ConnectionSocket {
@@ -18,6 +17,8 @@ pub struct ConnectionSocket {
     ack_num: u32, //Edited every time a packet is received (first_syn_ack(), process_syn_ack(), establish_handler()) and viewed in build_packet()
     read_buf: Arc<SyncBuf<RecvBuf>>,
     write_buf: Arc<SyncBuf<SendBuf>>,
+    retr_timer: RetransmissionTimer,
+    retr_queue: RetransmissionQueue
 }
 
 //TODO: deal with handshake timeouts
@@ -30,15 +31,18 @@ impl ConnectionSocket {
     ) -> ConnectionSocket {
         let mut rand_rng = rand::thread_rng();
         let seq_num = rand_rng.gen::<u32>() / 2;
+        let mut timer: RetransmissionTimer = RetransmissionTimer::new();
         ConnectionSocket {
             state,
             src_addr,
             dst_addr,
-            seq_num, 
+            seq_num,
             ip_sender,
             ack_num: 0, //We don't know what the ack number should be yet - in some sense, self.set_init_ack() finishes the initialization of the socket
             read_buf: Arc::new(SyncBuf::new(RecvBuf::new())),
             write_buf: Arc::new(SyncBuf::new(SendBuf::new(seq_num))),
+            retr_timer: timer,
+            retr_queue: RetransmissionQueue::new()
         }
     }
 
@@ -57,8 +61,11 @@ impl ConnectionSocket {
         //let slf_clone = Arc::clone(&slf); //Needed for zero window probing
         let mut slf = slf.lock().unwrap();
         //Universal packet reception actions
-        if has_flags(&tpack.header, RST) { panic!("Received RST packet") } //Panics if RST flag received
-        { //Update (remote) window size
+        if has_flags(&tpack.header, RST) {
+            panic!("Received RST packet")
+        } //Panics if RST flag received
+        {
+            //Update (remote) window size
             let mut write_buf = slf.write_buf.get_buf();
             write_buf.update_window(tpack.header.window_size);
         }
@@ -100,22 +107,32 @@ impl ConnectionSocket {
         TcpState::SynSent
     }
     fn process_ack(&self, tpack: TcpPacket) -> TcpState {
-        if has_only_flags(&tpack.header, ACK) { return TcpState::Established; }
+        if has_only_flags(&tpack.header, ACK) {
+            return TcpState::Established;
+        }
         TcpState::SynRecvd
     }
     fn established_handle(&mut self, tpack: TcpPacket) -> TcpState {
         match header_flags(&tpack.header) {
-            ACK if tpack.payload.len() == 0 => { //Received an acknowledgement of data sent
+            ACK if tpack.payload.len() == 0 => {
+                //Received an acknowledgement of data sent
                 let mut send_buf = self.write_buf.get_buf();
                 send_buf.ack_data(tpack.header.acknowledgment_number);
                 self.write_buf.alert_ready();
             }
-            ACK => { //Received data
+            ACK => {
+                //Received data
                 //Add data to Recv Buffer
                 let mut recv_buf = self.read_buf.get_buf();
                 let new_ack = recv_buf.add(tpack.header.sequence_number, tpack.payload.clone());
                 self.ack_num = new_ack;
                 drop(recv_buf);
+                // Remove acknowledged packets from queue
+                if let Some(measured_rtt) = self.retr_queue.calculate_rtt(new_ack) {
+                    self.retr_timer.update_rto(measured_rtt);
+                    self.retr_timer.retransmission_count = 0;
+                }
+                self.retr_queue.remove_acked_segments(new_ack);
                 //Let any waiting receive() thread know that data was just added to the receive buffer
                 self.read_buf.alert_ready();
                 //Send acknowledgement for received data
@@ -136,7 +153,7 @@ impl ConnectionSocket {
         //Set ack_num
         self.ack_num = rem_seq_num.clone();
         self.ack_num += 1; //Increment to be next expected value of sequence number
-        //Set Recv Buffer's initial remote sequence number
+                           //Set Recv Buffer's initial remote sequence number
         let mut read_buf = self.read_buf.get_buf();
         read_buf.set_init_seq(rem_seq_num);
     }
@@ -144,39 +161,50 @@ impl ConnectionSocket {
     //
     //BUILDING AND SENDING PACKETS
     //
-
     fn send_flags(&mut self, flags: u8) {
-        self.build_and_send(Vec::new(), flags).expect("Error sending flag packet to partner");
-        if (flags & SYN) != 0 || (flags & FIN) != 0 { self.seq_num += 1 }
+        self.build_and_send(Vec::new(), flags)
+            .expect("Error sending flag packet to partner");
+        if (flags & SYN) != 0 || (flags & FIN) != 0 {
+            self.seq_num += 1
+        }
     }
 
     fn send_data(&mut self, data: Vec<u8>) {
         let data_length = data.len();
-        self.build_and_send(data, ACK).expect("Error sending data packet to partner");
+        self.build_and_send(data, ACK)
+            .expect("Error sending data packet to partner");
         self.seq_num += data_length as u32;
     }
 
-    fn send_probe(&self, data: Vec<u8>) {
-        self.build_and_send(data, ACK).expect("Error sending probe packe to partner")
+    fn send_probe(&mut self, data: Vec<u8>) {
+        self.build_and_send(data, ACK)
+            .expect("Error sending probe packe to partner")
         //Don't adjust sequence number for probes
     }
-
+    /// Builds and sends a TCP packet with the given payload and flags
     fn build_and_send(
-        &self,
+        &mut self,
         payload: Vec<u8>,
         flags: u8,
     ) -> result::Result<(), SendError<PacketBasis>> {
         let new_pack = self.build_packet(payload, flags);
+
+        self.add_to_queue(new_pack.header.sequence_number.clone(), new_pack.payload.clone(), flags);
         let pbasis = self.packet_basis(new_pack);
+        
         self.ip_sender.send(pbasis)
     }
+    fn add_to_queue(&mut self, seq_num: u32, data: Vec<u8>, flags: u8) {
+        self.retr_queue.add_segment(seq_num, data.clone(), flags);
+    }
+    /// Takes in a TCP header and a u8 representing flags and builds a TCP packet
     fn build_packet(&self, payload: Vec<u8>, flags: u8) -> TcpPacket {
         let window_size = { self.read_buf.get_buf().window() };
         let mut tcp_header = TcpHeader::new(
             self.src_addr.port,
             self.dst_addr.port,
             self.seq_num,
-            window_size
+            window_size,
         );
         tcp_header.acknowledgment_number = self.ack_num;
         ConnectionSocket::set_flags(&mut tcp_header, flags);
@@ -264,36 +292,49 @@ impl ConnectionSocket {
         bytes_sent as u16
     }
 
-    fn send_onwards(slf: Arc<Mutex<Self>>, buf_update: Arc<Condvar>, terminate_send: Arc<AtomicBool>) -> () {
+    fn send_onwards(
+        slf: Arc<Mutex<Self>>,
+        buf_update: Arc<Condvar>,
+        terminate_send: Arc<AtomicBool>,
+    ) -> () {
         let write_buf = {
             let slf = slf.lock().unwrap();
             Arc::clone(&slf.write_buf)
         };
         let mut snd_state = SendState::Sending;
-        loop { 
+        loop {
             let to_send = match snd_state {
-                SendState::Sending => {//Sending like usual
+                SendState::Sending => {
+                    //Sending like usual
                     let mut writer = write_buf.get_buf();
                     let nxt_data = writer.next_data();
-                    if let NextData::ZeroWindow(_) = nxt_data { thread::sleep(Duration::from_millis(5000)) }
+                    if let NextData::ZeroWindow(_) = nxt_data {
+                        thread::sleep(Duration::from_millis(5000))
+                    }
                     nxt_data
                 }
-                SendState::Probing => {//Remote window was empty last we know, so wait then send the probe packet
+                SendState::Probing => {
+                    //Remote window was empty last we know, so wait then send the probe packet
                     thread::sleep(Duration::from_millis(5000));
                     let mut writer = write_buf.get_buf();
                     let nxt_data = writer.next_data();
-                    if let NextData::Data(_) | NextData::NoData  = nxt_data {
+                    if let NextData::Data(_) | NextData::NoData = nxt_data {
                         let mut slf = slf.lock().unwrap();
                         slf.seq_num += 1; //Account for probe packet now successfully transmitted
                     }
                     nxt_data
                 }
-                SendState::Waiting => {//Buffer was empty last time we checked, so we check to see if we're done sending, and if not, wait till we receive and update 
-                    if terminate_send.load(Ordering::SeqCst) { break; }
+                SendState::Waiting => {
+                    //Buffer was empty last time we checked, so we check to see if we're done sending, and if not, wait till we receive and update
+                    if terminate_send.load(Ordering::SeqCst) {
+                        break;
+                    }
                     let mut writer = write_buf.get_buf();
                     writer = buf_update.wait(writer).unwrap();
                     let nxt_data = writer.next_data();
-                    if let NextData::ZeroWindow(_) = nxt_data { thread::sleep(Duration::from_millis(5000)) }
+                    if let NextData::ZeroWindow(_) = nxt_data {
+                        thread::sleep(Duration::from_millis(5000))
+                    }
                     nxt_data
                 }
             };
@@ -305,29 +346,14 @@ impl ConnectionSocket {
                 }
                 NextData::ZeroWindow(probe) => {
                     //thread::sleep(Duration::from_millis(5000));
-                    let slf = slf.lock().unwrap();
+                    let mut slf = slf.lock().unwrap();
                     slf.send_probe(probe);
                     snd_state = SendState::Probing
                 }
                 NextData::NoData => snd_state = SendState::Waiting,
             }
         }
-    }
-
-    fn run_timer(slf: Arc<Mutex<Self>>) -> () {
-        let mut retr_timer = RetransmissionTimer::new();
-        retr_timer.start_timer(); 
-        loop {
-            thread::sleep(retr_timer.rto); 
-            if retr_timer.is_expired() {
-                break; // Fail condition
-            }
-            retr_timer.do_retransmission();
-            // Logic for actually doing the retransmission
-        }
-    }
-    // TODO: Implement retransmission RTT calculation
-
+    } 
     pub fn receive(slf: Arc<Mutex<Self>>, bytes: u16) -> Vec<u8> {
         let read_buf = {
             let slf = slf.lock().unwrap();
@@ -336,111 +362,35 @@ impl ConnectionSocket {
         let mut recv_buf: std::sync::MutexGuard<'_, RecvBuf> = read_buf.wait();
         recv_buf.read(bytes)
     }
+
+    /// Method to check for timed-out segments
+    pub fn check_timeouts(&mut self) {
+        let current_rto = self.retr_timer.rto;
+        let timed_out_segments = self.retr_queue.get_timed_out_segments(current_rto);
+
+        if !timed_out_segments.is_empty() {
+            // Handle retransmission
+            for segment in timed_out_segments {
+                // Resend the segment
+                self.send_segment(segment.seq_num, segment.payload.clone(), segment.flags);
+            }
+            // Update retransmission timer on timeout
+            self.retr_timer.do_retransmission();
+        }
+    }
+    fn send_segment(&mut self, seq_num: u32, payload: Vec<u8>, flags: u8) {
+        let mut tpack: TcpPacket = self.build_packet(payload, flags);
+        tpack.header.sequence_number = seq_num;
+        let pbasis = self.packet_basis(tpack);
+        match self.ip_sender.send(pbasis) {
+            Ok(()) => (),
+            Err(_) => eprintln!("Failed to send retransmission packet"),
+        }
+    }
 }
 
 enum SendState {
     Sending,
-    Probing, 
-    Waiting
+    Probing,
+    Waiting,
 }
-
-/* Algorithm for calculatating RTO and successive:
-
-SEE RFC 6298
-Note: G assumed to be 0
-
-init state:
-RTO_INITIAL = 1
-min_rto, max_rto, alpha, beta = 1, 100, 0.125, 0.25
-retransmission count = 0
-
-AFTER FIRST RTT -> R
-SRTT = R
-RTTVAR = R/2
-RTO = SRTT + (K * RTTVAR)
-
-AFTER SECOND RTT -> R'
-SRTT = (1 - ALPHA) * SRTT + ALPHA * R'
-RTTVAR = (1 - BETA) * RTTVAR + BETA * ABS(SRTT - R')
-
-SUCCESSIVE:
-RTO = SRTT + (K * RTTVAR)
-
-CONSTANTS:
-- BETA = 1/4
-- ALPHA = 1/8
-- K = 4
-
-*/
-
-// CONSTANTS
-const MIN_RTO: u64 = 1; // Milliseconds
-const MAX_RTO: u64 = 100; // Milliseconds
-
-pub struct RetransmissionTimer {
-    rto: Duration,              // RTO: retransmission timeout
-    srtt: Option<Duration>,     // Initially none, see above algo
-    rttvar: Option<Duration>,   // Initially none, see above algo
-    min_rto: Duration,          // Minimum RTO: 1ms for imp, 150-250ms for testing
-    max_rto: Duration,          // Maximum RTO: 100ms(?)
-    retransmission_count: u32,  // Attempt counter ; stop at 3
-    time_since_resend: Option<Instant>, // Created on startup with val 0 then updated at each retransmission ; RTT equivalent
-}
-impl RetransmissionTimer {
-    pub fn new() -> RetransmissionTimer {
-        RetransmissionTimer {
-            rto: Duration::from_millis(MIN_RTO),
-            srtt: None,
-            rttvar: None,
-            min_rto: Duration::from_millis(MIN_RTO),
-            max_rto: Duration::from_millis(MAX_RTO),
-            retransmission_count: 0,
-            time_since_resend: None,
-        }
-    }
-    fn update_rto(&mut self, measured_rtt: Duration) {
-        if let (Some(srtt), Some(rttvar)) = (self.srtt, self.rttvar) {
-            // Successive rtt algorithms ; see RFC 6298 2.3
-
-            // Since duration doesn't support abs, we finagle it a bit
-            let delta = if measured_rtt > srtt {
-                measured_rtt - srtt
-            } else {
-                srtt - measured_rtt
-            };
-            self.rttvar = Some(rttvar * 3 / 4 + delta / 4);
-            self.srtt = Some(srtt * 7 / 8 + measured_rtt / 8);
-
-            // Update RTO with SRTT and RTTVAR ; More absolute val finagling
-            self.rto = self.srtt.unwrap() + self.rttvar.unwrap() * 4;
-            self.rto = self.rto.clamp(self.min_rto, self.max_rto);
-        } else {
-            // First rtt algorithm ; see RFC 6298 2.2
-            self.srtt = Some(measured_rtt);
-            self.rttvar = Some(measured_rtt / 2);
-            self.rto = self.srtt.unwrap() + (4 * self.rttvar.unwrap());
-        }
-    }
-    fn do_retransmission(&mut self) { 
-        self.retransmission_count += 1;
-        self.rto *= 2; // RFC 6298 (5.5) 
-    }
-    pub fn start_timer (&mut self) {
-        self.time_since_resend = Some(Instant::now());
-    }
-    pub fn is_expired (&mut self) -> bool {
-        if let Some(time_since_resend) = self.time_since_resend {
-            time_since_resend.elapsed() > self.rto
-        } else {
-            false
-        }
-    }
-    pub fn reset (&mut self) {
-        self.retransmission_count = 0;
-        self.rto = Duration::from_millis(MIN_RTO);
-        self.rttvar = None;
-        self.srtt = None;
-        self.time_since_resend = None;
-    }
-}
-
