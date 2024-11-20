@@ -1,5 +1,5 @@
-use std::time::{ Duration, Instant };
 use std::collections::VecDeque;
+use std::time::{Duration, Instant};
 
 /* Algorithm for calculatating RTO and successive:
 
@@ -30,17 +30,18 @@ CONSTANTS:
 
 */
 
+// NOTE: These should be 1 millisecond and 60000 milliseconds for turn in
 // CONSTANTS
 const MIN_RTO: u64 = 150; // Milliseconds
 pub const MAX_RTO: u64 = 60000; // Milliseconds
 
 #[derive(Debug)]
 pub struct RetransmissionTimer {
-    pub rto: Duration, // RTO: retransmission timeout
-    srtt: Option<Duration>, // Initially none, see above algo
-    rttvar: Option<Duration>, // Initially none, see above algo
-    min_rto: Duration, // Minimum RTO: 1ms for imp, 150-250ms for testing
-    max_rto: Duration, // Maximum RTO: 100ms(?)
+    pub rto: Duration,             // RTO: retransmission timeout
+    srtt: Option<Duration>,        // Initially none, see above algo
+    rttvar: Option<Duration>,      // Initially none, see above algo
+    min_rto: Duration,             // Minimum RTO: 1ms for imp, 150-250ms for testing
+    max_rto: Duration,             // Maximum RTO: 100ms(?)
     pub retransmission_count: u32, // Attempt counter ; stop at 3
 }
 impl RetransmissionTimer {
@@ -89,7 +90,7 @@ impl RetransmissionTimer {
         if self.rto > self.max_rto {
             self.rto = self.max_rto;
         }
-    } 
+    }
     pub fn reset(&mut self) {
         self.retransmission_count = 0;
         self.rto = Duration::from_millis(MIN_RTO);
@@ -161,8 +162,10 @@ impl RetransmissionQueue {
     }
     pub fn remove_acked_segments(&mut self, ack_num: u32) {
         self.queue.retain(|s| s.seq_num >= ack_num);
-        println!("Removing acked segments, queue looks like: {:?}", self.queue);
-
+        println!(
+            "Removing acked segments, queue looks like: {:?}",
+            self.queue
+        );
     }
     pub fn calculate_rtt(&self, ack_num: u32) -> Option<Duration> {
         if let Some(segment) = self.queue.iter().find(|s| s.seq_num == ack_num) {

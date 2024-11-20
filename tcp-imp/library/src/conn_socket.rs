@@ -1,8 +1,8 @@
 use crate::prelude::*;
+use crate::retransmission::*;
 use crate::send_recv_utils::*;
 use crate::tcp_utils::*;
 use crate::utils::*;
-use crate::retransmission::*;
 //TODO:
 //Get post ZWP functionality to work better (put more inside send_onwards)
 //Fix bug where we can't send packets that exceed remote window size
@@ -31,7 +31,7 @@ impl ConnectionSocket {
         src_addr: TcpAddress,
         dst_addr: TcpAddress,
         closed_sender: Arc<Sender<SocketId>>,
-        ip_sender: Arc<Sender<PacketBasis>>
+        ip_sender: Arc<Sender<PacketBasis>>,
     ) -> ConnectionSocket {
         let mut rand_rng = rand::thread_rng();
         let seq_num = rand_rng.gen::<u32>() / 2;
@@ -132,7 +132,7 @@ impl ConnectionSocket {
                     retr_timer.update_rto(measured_rtt);
                     retr_timer.retransmission_count = 0;
                 }
-                retr_queue.remove_acked_segments(new_ack);
+                retr_queue.remove_acked_segments(tpack.header.acknowledgment_number);
             }
             //Send response (ACK in this case) and change state
             self.send_flags(ACK);
@@ -154,7 +154,7 @@ impl ConnectionSocket {
                     retr_timer.update_rto(measured_rtt);
                     retr_timer.retransmission_count = 0;
                 }
-                retr_queue.remove_acked_segments(new_ack);
+                retr_queue.remove_acked_segments(tpack.header.acknowledgment_number);
             }
             return TcpState::Established;
         }
@@ -178,7 +178,8 @@ impl ConnectionSocket {
                         retr_timer.update_rto(measured_rtt);
                         retr_timer.retransmission_count = 0;
                     }
-                    retr_queue.remove_acked_segments(new_ack);
+                    println!("Removing message with ack: {}", new_ack);
+                    retr_queue.remove_acked_segments(tpack.header.acknowledgment_number);
                 }
                 self.write_buf.alert_ready();
             }
@@ -201,11 +202,10 @@ impl ConnectionSocket {
                 self.send_flags(ACK);
                 return TcpState::CloseWait;
             }
-            _ =>
-                eprintln!(
-                    "I got no clue how to deal with a packet that has flags: {}",
-                    header_flags(&tpack.header)
-                ),
+            _ => eprintln!(
+                "I got no clue how to deal with a packet that has flags: {}",
+                header_flags(&tpack.header)
+            ),
         }
         TcpState::Established
     }
@@ -282,10 +282,9 @@ impl ConnectionSocket {
                 self.closed_sender.send(self.sid).unwrap();
                 return TcpState::Closed;
             }
-            _ =>
-                eprintln!(
-                    "LAST ACK: I shouldn't receive anything that's not an ACK at this point!!!"
-                ),
+            _ => eprintln!(
+                "LAST ACK: I shouldn't receive anything that's not an ACK at this point!!!"
+            ),
         }
         TcpState::LastAck
     }
@@ -324,7 +323,7 @@ impl ConnectionSocket {
         //Set ack_num
         self.ack_num = rem_seq_num.clone();
         self.ack_num += 1; //Increment to be next expected value of sequence number
-        //Set Recv Buffer's initial remote sequence number
+                           //Set Recv Buffer's initial remote sequence number
         let mut read_buf = self.read_buf.get_buf();
         read_buf.set_init_seq(rem_seq_num);
     }
@@ -355,7 +354,7 @@ impl ConnectionSocket {
                 self.add_to_queue(
                     packet.header.sequence_number.clone(),
                     packet.payload.clone(),
-                    ACK
+                    ACK,
                 );
                 self.seq_num += data_length as u32;
             }
@@ -363,14 +362,15 @@ impl ConnectionSocket {
         }
     }
     fn send_probe(&mut self, data: Vec<u8>) {
-        self.build_and_send(data, ACK).expect("Error sending probe packe to partner");
+        self.build_and_send(data, ACK)
+            .expect("Error sending probe packe to partner");
         //Don't adjust sequence number for probes
     }
     /// Builds and sends a TCP packet with the given payload and flags
     fn build_and_send(
         &mut self,
         payload: Vec<u8>,
-        flags: u8
+        flags: u8,
     ) -> result::Result<TcpPacket, SendError<PacketBasis>> {
         let new_pack = self.build_packet(payload, flags);
         let pbasis = self.packet_basis(new_pack.clone());
@@ -381,7 +381,7 @@ impl ConnectionSocket {
     }
     fn add_to_queue(&mut self, seq_num: u32, data: Vec<u8>, flags: u8) {
         let mut retr_queue = self.retr_queue.lock().unwrap();
-        retr_queue.add_segment(seq_num, data.clone(), flags); 
+        retr_queue.add_segment(seq_num, data.clone(), flags);
     }
     /// Takes in a TCP header and a u8 representing flags and builds a TCP packet
     fn build_packet(&self, payload: Vec<u8>, flags: u8) -> TcpPacket {
@@ -390,7 +390,7 @@ impl ConnectionSocket {
             self.src_addr.port,
             self.dst_addr.port,
             self.seq_num,
-            window_size
+            window_size,
         );
         tcp_header.acknowledgment_number = self.ack_num;
         ConnectionSocket::set_flags(&mut tcp_header, flags);
@@ -450,8 +450,7 @@ impl ConnectionSocket {
 
         let thread_slf = Arc::clone(&slf);
 
-        let thread_send_onwards = thread::Builder
-            ::new()
+        let thread_send_onwards = thread::Builder::new()
             .name("send_onwards".to_string())
             .spawn(move || Self::send_onwards(thread_slf, thread_buf_update, thread_terminate_send))
             .expect("Could not spawn thread");
@@ -473,14 +472,16 @@ impl ConnectionSocket {
         }
         terminate_send.store(true, Ordering::SeqCst);
 
-        thread_send_onwards.join().expect("Send onwards thread panicked");
+        thread_send_onwards
+            .join()
+            .expect("Send onwards thread panicked");
         bytes_sent as u16
     }
 
     fn send_onwards(
         slf: Arc<Mutex<Self>>,
         buf_update: Arc<Condvar>,
-        terminate_send: Arc<AtomicBool>
+        terminate_send: Arc<AtomicBool>,
     ) -> () {
         let write_buf = {
             let slf = slf.lock().unwrap();
