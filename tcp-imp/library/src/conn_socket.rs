@@ -106,6 +106,7 @@ impl ConnectionSocket {
         let mut state = slf.state.write().unwrap();
         *state = new_state;
     }
+    //TODO: Something fishy going on with these acknowledgment numbers... hmmm
     fn process_syn(&mut self, tpack: TcpPacket) -> TcpState {
         if has_only_flags(&tpack.header, SYN) {
             //Deal with receiving first sequence number of TCP partner
