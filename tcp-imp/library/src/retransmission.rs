@@ -31,8 +31,8 @@ CONSTANTS:
 */
 
 // CONSTANTS
-const MIN_RTO: u64 = 1; // Milliseconds
-pub const MAX_RTO: u64 = 100; // Milliseconds
+const MIN_RTO: u64 = 150; // Milliseconds
+pub const MAX_RTO: u64 = 60000; // Milliseconds
 
 #[derive(Debug)]
 pub struct RetransmissionTimer {
@@ -129,7 +129,7 @@ impl RetrSegment {
 
 #[derive(Debug)]
 pub struct RetransmissionQueue {
-    queue: VecDeque<RetrSegment>,
+    pub queue: VecDeque<RetrSegment>,
 }
 
 impl RetransmissionQueue {
@@ -160,7 +160,9 @@ impl RetransmissionQueue {
         timed_out_segments
     }
     pub fn remove_acked_segments(&mut self, ack_num: u32) {
-        self.queue.retain(|s| s.seq_num > ack_num);
+        self.queue.retain(|s| s.seq_num >= ack_num);
+        println!("Removing acked segments, queue looks like: {:?}", self.queue);
+
     }
     pub fn calculate_rtt(&self, ack_num: u32) -> Option<Duration> {
         if let Some(segment) = self.queue.iter().find(|s| s.seq_num == ack_num) {

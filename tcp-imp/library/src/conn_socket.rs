@@ -21,7 +21,7 @@ pub struct ConnectionSocket {
     read_buf: Arc<SyncBuf<RecvBuf>>,
     write_buf: Arc<SyncBuf<SendBuf>>,
     retr_timer: Arc<Mutex<RetransmissionTimer>>,
-    retr_queue: Arc<Mutex<RetransmissionQueue>>
+    retr_queue: Arc<Mutex<RetransmissionQueue>>,
 }
 
 //TODO: deal with handshake timeouts
@@ -31,10 +31,10 @@ impl ConnectionSocket {
         src_addr: TcpAddress,
         dst_addr: TcpAddress,
         closed_sender: Arc<Sender<SocketId>>,
-        ip_sender: Arc<Sender<PacketBasis>>,
+        ip_sender: Arc<Sender<PacketBasis>>
     ) -> ConnectionSocket {
         let mut rand_rng = rand::thread_rng();
-        let seq_num = rand_rng.gen::<u32>() / 2; 
+        let seq_num = rand_rng.gen::<u32>() / 2;
         ConnectionSocket {
             state,
             src_addr,
@@ -47,7 +47,7 @@ impl ConnectionSocket {
             read_buf: Arc::new(SyncBuf::new(RecvBuf::new())),
             write_buf: Arc::new(SyncBuf::new(SendBuf::new(seq_num))),
             retr_timer: Arc::new(Mutex::new(RetransmissionTimer::new())),
-            retr_queue: Arc::new(Mutex::new(RetransmissionQueue::new()))
+            retr_queue: Arc::new(Mutex::new(RetransmissionQueue::new())),
         }
     }
     /// Periodically does checking/elimination/retransmission from the queue and timer
@@ -63,7 +63,7 @@ impl ConnectionSocket {
             slf.check_timeouts();
             let retr_timer = slf.retr_timer.lock().unwrap();
             rto = retr_timer.rto;
-        } 
+        }
     }
 
     //Sending first messages in handshake
@@ -82,7 +82,7 @@ impl ConnectionSocket {
         let mut slf = slf.lock().unwrap();
         //Universal packet reception actions
         if has_flags(&tpack.header, RST) {
-            panic!("Received RST packet")
+            panic!("Received RST packet");
         } //Panics if RST flag received
         {
             //Update (remote) window size
@@ -117,9 +117,23 @@ impl ConnectionSocket {
         panic!("Hmm, process_syn was called for a packet that was not SYN - check listener_recv()")
     }
     fn process_syn_ack(&mut self, tpack: TcpPacket) -> TcpState {
+        println!("Processing a syn | ack for my ack");
         if has_only_flags(&tpack.header, SYN | ACK) {
             //Deal with receiving first sequence number of TCP partner
             self.set_init_ack(tpack.header.sequence_number);
+            // TODO: ABSTRACT ALL UNTIL STATE INTO EXTRINSIC FUNCTION
+            {
+                let mut recv_buf = self.read_buf.get_buf();
+                let new_ack = recv_buf.add(tpack.header.sequence_number, tpack.payload.clone());
+                let mut retr_queue = self.retr_queue.lock().unwrap();
+                // Remove acknowledged packets from queue
+                if let Some(measured_rtt) = retr_queue.calculate_rtt(new_ack) {
+                    let mut retr_timer = self.retr_timer.lock().unwrap();
+                    retr_timer.update_rto(measured_rtt);
+                    retr_timer.retransmission_count = 0;
+                }
+                retr_queue.remove_acked_segments(new_ack);
+            }
             //Send response (ACK in this case) and change state
             self.send_flags(ACK);
             return TcpState::Established;
@@ -127,7 +141,21 @@ impl ConnectionSocket {
         TcpState::SynSent
     }
     fn process_ack(&self, tpack: TcpPacket) -> TcpState {
+        println!("Processing an ack for my syn | ack");
         if has_only_flags(&tpack.header, ACK) {
+            // TODO: ABSTRACT ALL UNTIL STATE INTO EXTRINSIC FUNCTION
+            {
+                let mut recv_buf = self.read_buf.get_buf();
+                let new_ack = recv_buf.add(tpack.header.sequence_number, tpack.payload.clone());
+                let mut retr_queue = self.retr_queue.lock().unwrap();
+                // Remove acknowledged packets from queue
+                if let Some(measured_rtt) = retr_queue.calculate_rtt(new_ack) {
+                    let mut retr_timer = self.retr_timer.lock().unwrap();
+                    retr_timer.update_rto(measured_rtt);
+                    retr_timer.retransmission_count = 0;
+                }
+                retr_queue.remove_acked_segments(new_ack);
+            }
             return TcpState::Established;
         }
         TcpState::SynRecvd
@@ -160,69 +188,79 @@ impl ConnectionSocket {
                 let mut recv_buf = self.read_buf.get_buf();
                 let new_ack = recv_buf.add(tpack.header.sequence_number, tpack.payload.clone());
                 self.ack_num = new_ack;
-                drop(recv_buf); 
+                drop(recv_buf);
                 //Let any waiting receive() thread know that data was just added to the receive buffer
                 self.read_buf.alert_ready();
                 //Send acknowledgement for received data
                 self.send_flags(ACK);
                 println!("Acknowledged received data");
             }
-            FIN => { 
+            FIN => {
                 //Other dude wants to close the connection
                 // Okay! I will close!
                 self.send_flags(ACK);
-                return TcpState::CloseWait
+                return TcpState::CloseWait;
             }
-            _ => eprintln!(
-                "I got no clue how to deal with a packet that has flags: {}",
-                header_flags(&tpack.header)
-            ),
+            _ =>
+                eprintln!(
+                    "I got no clue how to deal with a packet that has flags: {}",
+                    header_flags(&tpack.header)
+                ),
         }
         TcpState::Established
     }
-    fn close_wait_handler(&mut self, tpack: TcpPacket) -> TcpState{
+    fn close_wait_handler(&mut self, tpack: TcpPacket) -> TcpState {
         match header_flags(&tpack.header) {
             ACK => {
-                return TcpState::Closed
+                return TcpState::Closed;
             }
             _ => {
-                eprintln!("CLOSE_WAIT: I shouldn't get packet with flags: {}", header_flags(&tpack.header));
+                eprintln!(
+                    "CLOSE_WAIT: I shouldn't get packet with flags: {}",
+                    header_flags(&tpack.header)
+                );
             }
         }
-        return TcpState::CloseWait
+        return TcpState::CloseWait;
     }
-    fn fin_wait_1_handler(&mut self, tpack: TcpPacket) -> TcpState{
+    fn fin_wait_1_handler(&mut self, tpack: TcpPacket) -> TcpState {
         match header_flags(&tpack.header) {
             ACK if tpack.payload.len() == 0 => {
                 //Received an acknowledgement of FIN request
-                return TcpState::FinWait2
-            },
+                return TcpState::FinWait2;
+            }
             ACK => {
-                eprintln!("FIN_WAIT_1: I shouldn't be getting payloads with ACK flag yet: {}", header_flags(&tpack.header));
+                eprintln!(
+                    "FIN_WAIT_1: I shouldn't be getting payloads with ACK flag yet: {}",
+                    header_flags(&tpack.header)
+                );
             }
             _ => {
-                eprintln!("FIN_WAIT_1: I shouldn't get packet with flags: {}", header_flags(&tpack.header));
+                eprintln!(
+                    "FIN_WAIT_1: I shouldn't get packet with flags: {}",
+                    header_flags(&tpack.header)
+                );
             }
         }
         TcpState::FinWait1
     }
-    fn fin_wait_2_handler(&mut self, tpack: TcpPacket) -> TcpState{
-       match header_flags(&tpack.header) {
-        // TODO: This is jank, fix it!!!
-           FIN => {
+    fn fin_wait_2_handler(&mut self, tpack: TcpPacket) -> TcpState {
+        match header_flags(&tpack.header) {
+            // TODO: This is jank, fix it!!!
+            FIN => {
                 if tpack.header.ack {
                     println!("Received final FIN | ACK");
                     self.send_flags(ACK);
-                    return TcpState::TimeWait
+                    return TcpState::TimeWait;
                 }
-           }
-           ACK => {
+            }
+            ACK => {
                 //Received data
                 //Add data to Recv Buffer
                 let mut recv_buf = self.read_buf.get_buf();
                 let new_ack = recv_buf.add(tpack.header.sequence_number, tpack.payload.clone());
                 self.ack_num = new_ack;
-                drop(recv_buf); 
+                drop(recv_buf);
                 //Let any waiting receive() thread know that data was just added to the receive buffer
                 self.read_buf.alert_ready();
                 //Send acknowledgement for received data
@@ -230,7 +268,10 @@ impl ConnectionSocket {
                 println!("Acknowledged received data");
             }
             _ => {
-                eprintln!("FIN_WAIT_2: I shouldn't get packet with flags: {}", header_flags(&tpack.header));
+                eprintln!(
+                    "FIN_WAIT_2: I shouldn't get packet with flags: {}",
+                    header_flags(&tpack.header)
+                );
             }
         }
         TcpState::FinWait2
@@ -239,9 +280,12 @@ impl ConnectionSocket {
         match header_flags(&tpack.header) {
             ACK => {
                 self.closed_sender.send(self.sid).unwrap();
-                return TcpState::Closed
+                return TcpState::Closed;
             }
-            _ => eprintln!("LAST ACK: I shouldn't receive anything that's not an ACK at this point!!!")
+            _ =>
+                eprintln!(
+                    "LAST ACK: I shouldn't receive anything that's not an ACK at this point!!!"
+                ),
         }
         TcpState::LastAck
     }
@@ -254,7 +298,7 @@ impl ConnectionSocket {
                 let mut recv_buf = self.read_buf.get_buf();
                 let new_ack = recv_buf.add(tpack.header.sequence_number, tpack.payload.clone());
                 self.ack_num = new_ack;
-                drop(recv_buf); 
+                drop(recv_buf);
                 //Let any waiting receive() thread know that data was just added to the receive buffer
                 self.read_buf.alert_ready();
                 //Send acknowledgement for received data
@@ -262,7 +306,7 @@ impl ConnectionSocket {
                 println!("Acknowledged received data");
                 //Let backend know we've closed officially
                 self.closed_sender.send(self.sid).unwrap();
-                return TcpState::Closed
+                return TcpState::Closed;
             }
             _ => {
                 eprintln!("TIME_WAIT: I shouldn't get any packets!");
@@ -280,7 +324,7 @@ impl ConnectionSocket {
         //Set ack_num
         self.ack_num = rem_seq_num.clone();
         self.ack_num += 1; //Increment to be next expected value of sequence number
-                           //Set Recv Buffer's initial remote sequence number
+        //Set Recv Buffer's initial remote sequence number
         let mut read_buf = self.read_buf.get_buf();
         read_buf.set_init_seq(rem_seq_num);
     }
@@ -289,46 +333,55 @@ impl ConnectionSocket {
         let mut slf = slf.lock().unwrap();
         slf.sid = sid;
     }
-
+    // TODO: CLEAN UP HORRIBLE UGLY ADDING TO RETRANSMISSION QUEUE
     //
     //BUILDING AND SENDING PACKETS
     //
     fn send_flags(&mut self, flags: u8) {
-        self.build_and_send(Vec::new(), flags)
-            .expect("Error sending flag packet to partner");
+        match self.build_and_send(Vec::new(), flags) {
+            Ok(_) => {
+                ();
+            }
+            Err(e) => eprintln!("Error sending flags packet to partner: {}", e),
+        }
         if (flags & SYN) != 0 || (flags & FIN) != 0 {
-            self.seq_num += 1
+            self.seq_num += 1;
         }
     }
-
     fn send_data(&mut self, data: Vec<u8>) {
         let data_length = data.len();
-        self.build_and_send(data, ACK)
-            .expect("Error sending data packet to partner");
-        self.seq_num += data_length as u32;
+        match self.build_and_send(data, ACK) {
+            Ok(packet) => {
+                self.add_to_queue(
+                    packet.header.sequence_number.clone(),
+                    packet.payload.clone(),
+                    ACK
+                );
+                self.seq_num += data_length as u32;
+            }
+            Err(e) => eprintln!("Error sending data packet to partner: {}", e),
+        }
     }
-
     fn send_probe(&mut self, data: Vec<u8>) {
-        self.build_and_send(data, ACK)
-            .expect("Error sending probe packe to partner")
+        self.build_and_send(data, ACK).expect("Error sending probe packe to partner");
         //Don't adjust sequence number for probes
     }
     /// Builds and sends a TCP packet with the given payload and flags
     fn build_and_send(
         &mut self,
         payload: Vec<u8>,
-        flags: u8,
-    ) -> result::Result<(), SendError<PacketBasis>> {
+        flags: u8
+    ) -> result::Result<TcpPacket, SendError<PacketBasis>> {
         let new_pack = self.build_packet(payload, flags);
-
-        self.add_to_queue(new_pack.header.sequence_number.clone(), new_pack.payload.clone(), flags);
-        let pbasis = self.packet_basis(new_pack);
-        
-        self.ip_sender.send(pbasis)
+        let pbasis = self.packet_basis(new_pack.clone());
+        match self.ip_sender.send(pbasis) {
+            Ok(()) => Ok(new_pack),
+            Err(e) => Err(e),
+        }
     }
     fn add_to_queue(&mut self, seq_num: u32, data: Vec<u8>, flags: u8) {
         let mut retr_queue = self.retr_queue.lock().unwrap();
-        retr_queue.add_segment(seq_num, data.clone(), flags);
+        retr_queue.add_segment(seq_num, data.clone(), flags); 
     }
     /// Takes in a TCP header and a u8 representing flags and builds a TCP packet
     fn build_packet(&self, payload: Vec<u8>, flags: u8) -> TcpPacket {
@@ -337,7 +390,7 @@ impl ConnectionSocket {
             self.src_addr.port,
             self.dst_addr.port,
             self.seq_num,
-            window_size,
+            window_size
         );
         tcp_header.acknowledgment_number = self.ack_num;
         ConnectionSocket::set_flags(&mut tcp_header, flags);
@@ -397,7 +450,8 @@ impl ConnectionSocket {
 
         let thread_slf = Arc::clone(&slf);
 
-        let thread_send_onwards = thread::Builder::new()
+        let thread_send_onwards = thread::Builder
+            ::new()
             .name("send_onwards".to_string())
             .spawn(move || Self::send_onwards(thread_slf, thread_buf_update, thread_terminate_send))
             .expect("Could not spawn thread");
@@ -419,16 +473,14 @@ impl ConnectionSocket {
         }
         terminate_send.store(true, Ordering::SeqCst);
 
-        thread_send_onwards
-            .join()
-            .expect("Send onwards thread panicked");
+        thread_send_onwards.join().expect("Send onwards thread panicked");
         bytes_sent as u16
     }
 
     fn send_onwards(
         slf: Arc<Mutex<Self>>,
         buf_update: Arc<Condvar>,
-        terminate_send: Arc<AtomicBool>,
+        terminate_send: Arc<AtomicBool>
     ) -> () {
         let write_buf = {
             let slf = slf.lock().unwrap();
@@ -442,7 +494,7 @@ impl ConnectionSocket {
                     let mut writer = write_buf.get_buf();
                     let nxt_data = writer.next_data();
                     if let NextData::ZeroWindow(_) = nxt_data {
-                        thread::sleep(Duration::from_millis(5000))
+                        thread::sleep(Duration::from_millis(5000));
                     }
                     nxt_data
                 }
@@ -466,7 +518,7 @@ impl ConnectionSocket {
                     writer = buf_update.wait(writer).unwrap();
                     let nxt_data = writer.next_data();
                     if let NextData::ZeroWindow(_) = nxt_data {
-                        thread::sleep(Duration::from_millis(5000))
+                        thread::sleep(Duration::from_millis(5000));
                     }
                     nxt_data
                 }
@@ -475,18 +527,20 @@ impl ConnectionSocket {
                 NextData::Data(data) => {
                     let mut slf = slf.lock().unwrap();
                     slf.send_data(data);
-                    snd_state = SendState::Sending
+                    snd_state = SendState::Sending;
                 }
                 NextData::ZeroWindow(probe) => {
                     //thread::sleep(Duration::from_millis(5000));
                     let mut slf = slf.lock().unwrap();
                     slf.send_probe(probe);
-                    snd_state = SendState::Probing
+                    snd_state = SendState::Probing;
                 }
-                NextData::NoData => snd_state = SendState::Waiting,
+                NextData::NoData => {
+                    snd_state = SendState::Waiting;
+                }
             }
         }
-    } 
+    }
     pub fn receive(slf: Arc<Mutex<Self>>, bytes: u16) -> Vec<u8> {
         let read_buf = {
             let slf = slf.lock().unwrap();
@@ -496,14 +550,14 @@ impl ConnectionSocket {
         recv_buf.read(bytes)
     }
     /// Method to check for timed-out segments
-    pub fn check_timeouts(&mut self) { 
-        let current_rto = { 
+    pub fn check_timeouts(&mut self) {
+        let current_rto = {
             let retr_timer = self.retr_timer.lock().unwrap();
             retr_timer.rto
         };
-        let timed_out_segments = { 
+        let timed_out_segments = {
             let mut retr_queue = self.retr_queue.lock().unwrap();
-            retr_queue.get_timed_out_segments(current_rto) 
+            retr_queue.get_timed_out_segments(current_rto)
         };
         if !timed_out_segments.is_empty() {
             // Handle retransmission

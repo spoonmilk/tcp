@@ -34,7 +34,7 @@ impl TcpAddress {
 
 
 /// A TCP Packet with a TCP header and a payload ; Encapsulated in IP upon send
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TcpPacket {
     pub header: TcpHeader,
     pub payload: Vec<u8>

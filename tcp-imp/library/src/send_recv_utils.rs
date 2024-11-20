@@ -1,7 +1,7 @@
 use crate::prelude::*;
 
 const MAX_MSG_SIZE: usize = 1460; //+ 40 for headers = 1500 total max packet size
-const BUFFER_CAPACITY: usize = 10;//65535;
+const BUFFER_CAPACITY: usize = 65535;//65535;
 
 #[derive(Debug)]
 pub struct SyncBuf<T: TcpBuffer> {
