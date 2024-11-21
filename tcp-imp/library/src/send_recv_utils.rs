@@ -44,7 +44,8 @@ pub struct SendBuf {
     rem_window: u16,
     num_acked: u32,
     our_init_seq: u32,
-    probing: bool //Accounts for unrectified nxt incrementing during probing - kinda kludgy
+    probing: bool, //Identifies whether or not we are currently probing - a little kludgy
+    stop_probing_sender: Sender<()>
 }
 
 impl TcpBuffer for SendBuf {
@@ -55,14 +56,15 @@ impl TcpBuffer for SendBuf {
 }
 
 impl SendBuf {
-    pub fn new(our_init_seq: u32) -> SendBuf {
+    pub fn new(our_init_seq: u32, stop_probing_sender: Sender<()>) -> SendBuf {
         SendBuf {
             circ_buffer: CircularBuffer::new(),
             nxt: 0,
             rem_window: 0,
             num_acked: 0,
-            our_init_seq, //OUR
-            probing: false
+            our_init_seq, //OURS
+            probing: false,
+            stop_probing_sender
         }
     }
     ///Fills up the circular buffer with the data in filler until the buffer is full,
@@ -74,7 +76,7 @@ impl SendBuf {
             .collect::<Vec<u8>>();
 
         self.circ_buffer.extend_from_slice(&to_add[..]);
-        println!("GOT HERE we added {:?} to the buffer", to_add);
+        println!("Adding this data: {to_add:?}");
         filler
     }
     ///Returns a vector of data to be put in the next TcpPacket to send, taking into account the input window size of the receiver
@@ -83,12 +85,9 @@ impl SendBuf {
         let nxt_data = if self.rem_window == 0 { //Zero window probing
             self.probing = true;
             let data = self.see_amount(1);
-            println!("Zero window probing this data: {data:?}");
+            println!("Preparing to zero window probe this data: {data:?}");
             data
         } else { //Normal data for next packet
-            /*if self.probing { //Kinda stupid and annoying way of accounting for probed packet
-                self.nxt += 1;
-            }*/
             let greatest_constraint = cmp::min(self.rem_window as usize,  MAX_MSG_SIZE);
             let data = self.take_amount(greatest_constraint);
             println!("Sending this data: {data:?}");
@@ -100,26 +99,6 @@ impl SendBuf {
             false if self.probing => NextData::ZeroWindow(nxt_data),
             false => NextData::Data(nxt_data)
         }
-        /* Old way of doing things
-        //Takes into account the three constraints on how much data can be sent in the next TcpPacket (window size, maximum message size, and amount of data in the buffer)
-        //and finds the appropriate
-        let constraints = vec![
-            self.rem_window as usize,
-            self.circ_buffer.len() - self.nxt,
-            MAX_MSG_SIZE,
-        ]; 
-        // Obtain greatest (unintuitively, smallest) constraint
-        let greatest_constraint = constraints.iter().min().unwrap(); 
-        let upper_bound = self.nxt + greatest_constraint;
-        // Grab data, feed to sender
-        let data: Vec<u8> = self
-            .circ_buffer
-            .range(self.nxt..upper_bound)
-            .cloned()
-            .collect();
-        self.nxt = upper_bound;
-        NextData::Data(data)
-        */
     } 
     ///Only used privately; same as see_amount but increments the nxt pointer
     fn take_amount(&mut self, amount: usize) -> Vec<u8> {
@@ -143,7 +122,9 @@ impl SendBuf {
         //Check for and handle transition from probing
         if self.probing && relative_ack > self.nxt as u32 {
             self.probing = false;
-            self.nxt += 1 
+            self.nxt += 1;
+            self.stop_probing_sender.send(()).unwrap();
+            println!("Stop probing CHANNEL signal sent"); 
         }
         // Decrement nxt pointer to match dropped data ; compensation for absence of una
         self.nxt -= relative_ack as usize;

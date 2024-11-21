@@ -11,7 +11,7 @@ use std::thread;
 use std::sync::mpsc::Receiver;
 use std::sync::Arc;
 use std::fs::File;
-use std::io::{self, Read};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 const READ_CHUNK: usize = 1024;
@@ -171,7 +171,7 @@ impl HostRepl {
         //Sanitize input
         let sid = if let Ok(sid) = args[0].parse::<SocketId>() { sid } else { return println!("Input socket ID {} invalid", args[0]) };
         //Make the backend close that socket
-        backend.close(sid);
+        if let Err(e) = backend.close(sid) { println!("{}", e.to_string())};
     }
     fn wrap_host_handler<F>(f: F) -> CommandHandler
     where

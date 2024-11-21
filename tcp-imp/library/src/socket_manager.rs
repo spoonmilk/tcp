@@ -50,7 +50,8 @@ impl SocketManager {
         match listener_table.get_mut(&port) {
             Some(listener) => {
                 listener.accepting = true;
-                //TODO: Needs to start all pending connections
+                let mut sock_table = self.socket_table.write().unwrap();
+                listener.pending_connections.drain(..).for_each(|pd_conn| { pd_conn.start(&mut sock_table); });
             },
             None => return // Listener was closed in the before this function got c
         };

@@ -125,13 +125,4 @@ pub struct PacketBasis {
     pub msg: Vec<u8>,
 }
 
-// TODO: GET HANDY WITH HANDLERS
-// type Handler(&Node, Packet) -> ()
-// HandlerTable: HashMap<IpNumber, Handler>
-// pub fn register_recv_handler(&mut self, type: IpNumber, function: Handler) -> {
-//     self.handlers.insert(type, function);
-// }
-// pub fn handle_rip(&self, node: &Node, packet: Packet) -> () {
-//    
-// }
 

@@ -64,8 +64,8 @@ impl PendingConn {
         ConnectionSocket::set_sid(Arc::clone(&sock), sid); //Socket needs to know its own ID
         let ret_clone = Arc::clone(&sock);
         // Spawn thread for timeouts
-        let time_clone = Arc::clone(&sock);
-        thread::spawn(move || { ConnectionSocket::time_check(time_clone); });
+        //let time_clone = Arc::clone(&sock);
+        //thread::spawn(move || { ConnectionSocket::time_check(time_clone); });
         let ent = ConnectionEntry { src_addr, dst_addr, state, sock };
         let ent = SocketEntry::Connection(ent);
         socket_table.insert(sid, ent);

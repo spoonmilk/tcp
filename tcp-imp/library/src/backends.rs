@@ -110,25 +110,16 @@ impl HostBackend {
     }
     pub fn close(&self, sid: SocketId) -> Result<()> {
         match self.socket_table().get(&sid) {
-            Some(SocketEntry::Connection(ent)) => self.close_connection(sid, ent),
+            Some(SocketEntry::Connection(ent)) => self.close_connection(ent),
             Some(SocketEntry::Listener(ent)) => self.close_listener(ent),
             None => return Err(Error::new(ErrorKind::InvalidInput, "Input socket ID does not match that of any sockets"))
         }
         Ok(())
     }
-    fn close_connection(&self, sid: SocketId, conn_ent: &ConnectionEntry) {
+    fn close_connection(&self, conn_ent: &ConnectionEntry) {
         //Run close on the socket
         let sock = Arc::clone(&conn_ent.sock);
-        let (send_signal, recv_signal) = channel::<()>();
         ConnectionSocket::close(sock);
-        //Spawn thread to remove socket from the socket table when it enters the CLOSED state 
-        let socket_table = Arc::clone(&self.socket_table);
-        thread::spawn(move || Self::remove_sock(socket_table, sid, recv_signal));
-    }
-    fn remove_sock(socket_table: Arc<RwLock<SocketTable>>, sid: SocketId, recv_signal: Receiver<()>) -> () {
-        recv_signal.recv().unwrap();
-        let mut sock_table = socket_table.write().unwrap();
-        sock_table.remove(&sid).expect("Socket Id doesn't exist within the table... possible synchronization issue?");
     }
     fn close_listener(&self, lst_ent: &ListenEntry) {
         let mut socket_manager = self.socket_manager.lock().unwrap();

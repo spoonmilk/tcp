@@ -86,13 +86,6 @@ pub fn initialize(config_info: IPConfig) -> Result<(Backend, Receiver<Packet>)> 
             Ok((Backend::Router(backend), ip_recver))
         }
         RoutingType::Static => {
-            // TODO: Add creating a socket manager here
-            // Get local host ip
-            /*
-            let local_ip = match interface_reps.get("if0") {
-                Some(inter_rep) => inter_rep.v_ip,
-                None => panic!("Could not initialize host, no local interface found.")
-            };*/
             //Make host backend
             let socket_table = Arc::new(RwLock::new(HashMap::new()));
             let backend = HostBackend::new(backend_interface_reps, backend_forwarding_table, socket_table , ip_sender);

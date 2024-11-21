@@ -3,10 +3,11 @@ use crate::retransmission::*;
 use crate::send_recv_utils::*;
 use crate::tcp_utils::*;
 use crate::utils::*;
+//use crate::retransmission::*;
 //TODO:
 //Get post ZWP functionality to work better (put more inside send_onwards)
-//Fix bug where we can't send packets that exceed remote window size
 type SocketId = u16;
+const ZWP_TIMEOUT: u64 = 50000; //in millis
 
 #[derive(Debug)]
 pub struct ConnectionSocket {
@@ -16,12 +17,13 @@ pub struct ConnectionSocket {
     sid: SocketId,
     closed_sender: Arc<Sender<SocketId>>,
     ip_sender: Arc<Sender<PacketBasis>>,
+    stop_probing_recver: Arc<Mutex<Receiver<()>>>, //Needs to be an Arc so that it can be cloned and self can be dropped, needs to be a mutex so Rust doesn't freak out about two threads using the receiver at once
     seq_num: u32, //Only edited in build_and_send() and viewed in build_packet()
     ack_num: u32, //Edited every time a packet is received (first_syn_ack(), process_syn_ack(), establish_handler()) and viewed in build_packet()
     read_buf: Arc<SyncBuf<RecvBuf>>,
     write_buf: Arc<SyncBuf<SendBuf>>,
     retr_timer: Arc<Mutex<RetransmissionTimer>>,
-    retr_queue: Arc<Mutex<RetransmissionQueue>>,
+    retr_queue: Arc<Mutex<RetransmissionQueue>>
 }
 
 //TODO: deal with handshake timeouts
@@ -34,7 +36,8 @@ impl ConnectionSocket {
         ip_sender: Arc<Sender<PacketBasis>>,
     ) -> ConnectionSocket {
         let mut rand_rng = rand::thread_rng();
-        let seq_num = rand_rng.gen::<u32>() / 2;
+        let seq_num = rand_rng.gen::<u32>() / 2; 
+        let (stop_probing_sender, stop_probing_recver) = channel::<()>();
         ConnectionSocket {
             state,
             src_addr,
@@ -43,14 +46,16 @@ impl ConnectionSocket {
             sid: 0, //We don't know on intialization - we'll only know once we get added to the socket table (and self.set_sid() is called)
             closed_sender,
             ip_sender,
+            stop_probing_recver: Arc::new(Mutex::new(stop_probing_recver)),
             ack_num: 0, //We don't know what the ack number should be yet - in some sense, self.set_init_ack() finishes the initialization of the socket
             read_buf: Arc::new(SyncBuf::new(RecvBuf::new())),
-            write_buf: Arc::new(SyncBuf::new(SendBuf::new(seq_num))),
+            write_buf: Arc::new(SyncBuf::new(SendBuf::new(seq_num, stop_probing_sender))),
             retr_timer: Arc::new(Mutex::new(RetransmissionTimer::new())),
-            retr_queue: Arc::new(Mutex::new(RetransmissionQueue::new())),
+            retr_queue: Arc::new(Mutex::new(RetransmissionQueue::new()))
         }
     }
     /// Periodically does checking/elimination/retransmission from the queue and timer
+    /*
     pub fn time_check(slf: Arc<Mutex<Self>>) {
         let mut rto = {
             let slf = slf.lock().unwrap();
@@ -63,8 +68,8 @@ impl ConnectionSocket {
             slf.check_timeouts();
             let retr_timer = slf.retr_timer.lock().unwrap();
             rto = retr_timer.rto;
-        }
-    }
+        } 
+    }*/
 
     //Sending first messages in handshake
     pub fn first_syn(slf: Arc<Mutex<Self>>) {
@@ -89,7 +94,6 @@ impl ConnectionSocket {
             let mut write_buf = slf.write_buf.get_buf();
             write_buf.update_window(tpack.header.window_size);
         }
-        //if tpack.header.window_size == 0 { Self::zero_window_probe(slf_clone) } //Sends probe packet if window is zero
         //State specific packet recpetion actions
         let new_state = {
             let slf_state = slf.state.read().unwrap();
@@ -319,7 +323,7 @@ impl ConnectionSocket {
         }
         TcpState::TimeWait
     }
-    fn closed_handler(&mut self, tpack: TcpPacket) -> TcpState {
+    fn closed_handler(&mut self, _tpack: TcpPacket) -> TcpState {
         eprintln!("NOOOOOOOOOOOOOO");
         TcpState::Closed
     }
@@ -489,63 +493,57 @@ impl ConnectionSocket {
         buf_update: Arc<Condvar>,
         terminate_send: Arc<AtomicBool>,
     ) -> () {
-        let write_buf = {
+        //Grab proper resources from slf before relinquishing its lock
+        let (write_buf, stop_probing_recver) = {
             let slf = slf.lock().unwrap();
-            Arc::clone(&slf.write_buf)
+            (Arc::clone(&slf.write_buf), Arc::clone(&slf.stop_probing_recver))
         };
-        let mut snd_state = SendState::Sending;
+        let stop_probing_recver = stop_probing_recver.lock().unwrap(); //No other thread should need to use this while this thread is, so good to claim this lock for the duration of the threads existence
+        //Start data sending loop
+        //let mut snd_state = SendState::Sending;
         loop {
-            let to_send = match snd_state {
-                SendState::Sending => {
-                    //Sending like usual
-                    let mut writer = write_buf.get_buf();
-                    let nxt_data = writer.next_data();
-                    if let NextData::ZeroWindow(_) = nxt_data {
-                        thread::sleep(Duration::from_millis(5000));
-                    }
-                    nxt_data
-                }
-                SendState::Probing => {
-                    //Remote window was empty last we know, so wait then send the probe packet
-                    thread::sleep(Duration::from_millis(5000));
-                    let mut writer = write_buf.get_buf();
-                    let nxt_data = writer.next_data();
-                    if let NextData::Data(_) | NextData::NoData = nxt_data {
-                        let mut slf = slf.lock().unwrap();
-                        slf.seq_num += 1; //Account for probe packet now successfully transmitted
-                    }
-                    nxt_data
-                }
-                SendState::Waiting => {
-                    //Buffer was empty last time we checked, so we check to see if we're done sending, and if not, wait till we receive and update
-                    if terminate_send.load(Ordering::SeqCst) {
-                        break;
-                    }
-                    let mut writer = write_buf.get_buf();
-                    writer = buf_update.wait(writer).unwrap();
-                    let nxt_data = writer.next_data();
-                    if let NextData::ZeroWindow(_) = nxt_data {
-                        thread::sleep(Duration::from_millis(5000));
-                    }
-                    nxt_data
-                }
+            let to_send = { //Get data to send
+                let mut writer = write_buf.get_buf();
+                writer.next_data()
             };
             match to_send {
                 NextData::Data(data) => {
                     let mut slf = slf.lock().unwrap();
                     slf.send_data(data);
-                    snd_state = SendState::Sending;
                 }
                 NextData::ZeroWindow(probe) => {
-                    //thread::sleep(Duration::from_millis(5000));
-                    let mut slf = slf.lock().unwrap();
-                    slf.send_probe(probe);
-                    snd_state = SendState::Probing;
+                    //Run a thread to zero window probe
+                    let slf_clone = Arc::clone(&slf);
+                    let done_probing = Arc::new(AtomicBool::new(false));
+                    let done_probing_clone = Arc::clone(&done_probing);
+                    thread::spawn(move || Self::zero_window_probe(slf_clone, probe, done_probing_clone));
+                    //Await signal to stop zero window probing
+                    stop_probing_recver.recv().unwrap();
+                    //Stop zero window probing thread and recover from probing
+                    done_probing.store(true, Ordering::SeqCst);
+                    { //Account for probe packet now successfully transmitted
+                        let mut slf = slf.lock().unwrap();
+                        slf.seq_num += 1;
+                    }
                 }
                 NextData::NoData => {
-                    snd_state = SendState::Waiting;
+                    //Check to see if we're just done sending
+                    if terminate_send.load(Ordering::SeqCst) { return; }
+                    //Wait on stuff getting added to buffer
+                    let writer = write_buf.get_buf();
+                    let _writer = buf_update.wait(writer).unwrap(); //Kinda jank cuz _writer is never used, but is cleanest solution I could think of without adding some stupid boolean flag
                 }
             }
+        }
+    } 
+    fn zero_window_probe(slf: Arc<Mutex<Self>>, probe_data: Vec<u8>, done_probing: Arc<AtomicBool>) {
+        loop {
+            thread::sleep(Duration::from_millis(ZWP_TIMEOUT));
+            if done_probing.load(Ordering::SeqCst) { return } //Stop probing
+            println!("Zero window probing: {probe_data:?}");
+            let mut slf = slf.lock().unwrap();
+            slf.send_probe(probe_data.clone());
+            drop(slf);
         }
     }
     pub fn receive(slf: Arc<Mutex<Self>>, bytes: u16) -> Vec<u8> {
@@ -557,8 +555,8 @@ impl ConnectionSocket {
         recv_buf.read(bytes)
     }
     /// Method to check for timed-out segments
-    pub fn check_timeouts(&mut self) {
-        let current_rto = {
+    pub fn check_timeouts(&mut self) { 
+        let current_rto = { 
             let retr_timer = self.retr_timer.lock().unwrap();
             retr_timer.rto
         };
@@ -598,8 +596,10 @@ impl ConnectionSocket {
     }
 }
 
+/*
 enum SendState {
     Sending,
     Probing,
     Waiting,
 }
+*/
