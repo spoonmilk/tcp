@@ -1,7 +1,8 @@
 use crate::prelude::*;
+use crate::retransmission::*;
 
 const MAX_MSG_SIZE: usize = 1460; //+ 40 for headers = 1500 total max packet size
-const BUFFER_CAPACITY: usize = 10;//65535;
+const BUFFER_CAPACITY: usize = 65535; //65535;
 
 #[derive(Debug)]
 pub struct SyncBuf<T: TcpBuffer> {
@@ -45,7 +46,8 @@ pub struct SendBuf {
     num_acked: u32,
     our_init_seq: u32,
     probing: bool, //Identifies whether or not we are currently probing - a little kludgy
-    stop_probing_sender: Sender<()>
+    stop_probing_sender: Sender<()>,
+    pub retr_queue: RetransmissionQueue,
 }
 
 impl TcpBuffer for SendBuf {
@@ -64,7 +66,8 @@ impl SendBuf {
             num_acked: 0,
             our_init_seq, //OURS
             probing: false,
-            stop_probing_sender
+            stop_probing_sender,
+            retr_queue: RetransmissionQueue::new(),
         }
     }
     ///Fills up the circular buffer with the data in filler until the buffer is full,
@@ -82,13 +85,15 @@ impl SendBuf {
     ///Returns a vector of data to be put in the next TcpPacket to send, taking into account the input window size of the receiver
     ///This vector contains as many bytes as possible up to the maximum payload size (1500)
     pub fn next_data(&mut self) -> NextData {
-        let nxt_data = if self.rem_window == 0 { //Zero window probing
+        let nxt_data = if self.rem_window == 0 {
+            //Zero window probing
             self.probing = true;
             let data = self.see_amount(1);
             println!("Preparing to zero window probe this data: {data:?}");
             data
-        } else { //Normal data for next packet
-            let greatest_constraint = cmp::min(self.rem_window as usize,  MAX_MSG_SIZE);
+        } else {
+            //Normal data for next packet
+            let greatest_constraint = cmp::min(self.rem_window as usize, MAX_MSG_SIZE);
             let data = self.take_amount(greatest_constraint);
             println!("Sending this data: {data:?}");
             self.rem_window -= data.len() as u16;
@@ -97,9 +102,9 @@ impl SendBuf {
         match nxt_data.is_empty() {
             true => NextData::NoData,
             false if self.probing => NextData::ZeroWindow(nxt_data),
-            false => NextData::Data(nxt_data)
+            false => NextData::Data(nxt_data),
         }
-    } 
+    }
     ///Only used privately; same as see_amount but increments the nxt pointer
     fn take_amount(&mut self, amount: usize) -> Vec<u8> {
         let data = self.see_amount(amount);
@@ -124,7 +129,7 @@ impl SendBuf {
             self.probing = false;
             self.nxt += 1;
             self.stop_probing_sender.send(()).unwrap();
-            println!("Stop probing CHANNEL signal sent"); 
+            println!("Stop probing CHANNEL signal sent");
         }
         // Decrement nxt pointer to match dropped data ; compensation for absence of una
         self.nxt -= relative_ack as usize;
@@ -136,12 +141,17 @@ impl SendBuf {
     pub fn update_window(&mut self, new_window: u16) {
         self.rem_window = new_window;
     }
+    pub fn check_timeouts(&mut self, current_rto: Duration) -> Vec<RetrSegment> {
+        let timed_out_segments: Vec<RetrSegment> =
+            { self.retr_queue.get_timed_out_segments(current_rto) };
+        timed_out_segments
+    }
 }
 
 pub enum NextData {
     Data(Vec<u8>),
     ZeroWindow(Vec<u8>),
-    NoData
+    NoData,
 }
 
 #[derive(Debug)]
@@ -188,16 +198,20 @@ impl RecvBuf {
     pub fn add(&mut self, seq_num: u32, data: Vec<u8>) -> u32 {
         //println!("sequence number: {}\nexpected sequence number: {}", seq_num, self.expected_seq());
         match seq_num.cmp(&self.expected_seq()) {
-            cmp::Ordering::Equal => { 
+            cmp::Ordering::Equal => {
                 let data_slice = match data.len() > self.window() as usize {
                     true => &data[..self.window() as usize],
-                    false => &data[..]
+                    false => &data[..],
                 };
                 self.circ_buffer.extend_from_slice(data_slice);
-                if let Some(next_data) = self.early_arrivals.remove(&self.expected_seq()) { return self.add(self.expected_seq(), next_data) }
-            },
-            cmp::Ordering::Less => {}, //Drop packet, contains stale data
-            cmp::Ordering::Greater => { self.early_arrivals.insert(seq_num, data); } //Early arrival, add it to early arrival hashmap
+                if let Some(next_data) = self.early_arrivals.remove(&self.expected_seq()) {
+                    return self.add(self.expected_seq(), next_data);
+                }
+            }
+            cmp::Ordering::Less => {} //Drop packet, contains stale data
+            cmp::Ordering::Greater => {
+                self.early_arrivals.insert(seq_num, data);
+            } //Early arrival, add it to early arrival hashmap
         }
         self.expected_seq()
         /* Old way of doing things
@@ -226,18 +240,20 @@ impl RecvBuf {
     }
 }
 
-
 //A wrapper for a HashMap<u32, Vec<u8>> that keeps track of the cumulative size of the data stored in the map
 //accessable via the len method like a vector
 #[derive(Debug)]
 struct PayloadMap {
     hash_map: HashMap<u32, Vec<u8>>, //Could be made pub if we ever need to call methods on the hashmap that aren't insert() or remove()
-    size: usize
+    size: usize,
 }
 
 impl PayloadMap {
     pub fn new() -> PayloadMap {
-        PayloadMap { hash_map: HashMap::new(), size: 0 }
+        PayloadMap {
+            hash_map: HashMap::new(),
+            size: 0,
+        }
     }
     pub fn insert(&mut self, key: u32, val: Vec<u8>) {
         self.size += val.len();
@@ -245,8 +261,12 @@ impl PayloadMap {
     }
     pub fn remove(&mut self, key: &u32) -> Option<Vec<u8>> {
         let payload = self.hash_map.remove(key);
-        if let Some(data) = &payload  { self.size -= data.len() }
+        if let Some(data) = &payload {
+            self.size -= data.len()
+        }
         payload
     }
-    pub fn len(&self) -> usize { self.size }
+    pub fn len(&self) -> usize {
+        self.size
+    }
 }

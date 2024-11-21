@@ -1,9 +1,9 @@
 use crate::prelude::*;
 use crate::retransmission::*;
+use crate::retransmission::*;
 use crate::send_recv_utils::*;
 use crate::tcp_utils::*;
 use crate::utils::*;
-use crate::retransmission::*;
 //TODO:
 //Get post ZWP functionality to work better (put more inside send_onwards)
 type SocketId = u16;
@@ -23,7 +23,7 @@ pub struct ConnectionSocket {
     read_buf: Arc<SyncBuf<RecvBuf>>,
     write_buf: Arc<SyncBuf<SendBuf>>,
     retr_timer: Arc<Mutex<RetransmissionTimer>>,
-    retr_queue: Arc<Mutex<RetransmissionQueue>>
+    // retr_queue: Arc<Mutex<RetransmissionQueue>>,
 }
 
 //TODO: deal with handshake timeouts
@@ -36,7 +36,7 @@ impl ConnectionSocket {
         ip_sender: Arc<Sender<PacketBasis>>,
     ) -> ConnectionSocket {
         let mut rand_rng = rand::thread_rng();
-        let seq_num = rand_rng.gen::<u32>() / 2; 
+        let seq_num = rand_rng.gen::<u32>() / 2;
         let (stop_probing_sender, stop_probing_recver) = channel::<()>();
         ConnectionSocket {
             state,
@@ -51,25 +51,36 @@ impl ConnectionSocket {
             read_buf: Arc::new(SyncBuf::new(RecvBuf::new())),
             write_buf: Arc::new(SyncBuf::new(SendBuf::new(seq_num, stop_probing_sender))),
             retr_timer: Arc::new(Mutex::new(RetransmissionTimer::new())),
-            retr_queue: Arc::new(Mutex::new(RetransmissionQueue::new()))
+            // retr_queue: Arc::new(Mutex::new(RetransmissionQueue::new())),
         }
     }
     /// Periodically does checking/elimination/retransmission from the queue and timer
     pub fn time_check(slf: Arc<Mutex<Self>>) {
-        let mut rto = {
+        let rto = {
             let slf = slf.lock().unwrap();
             let retr_timer = slf.retr_timer.lock().unwrap();
             retr_timer.rto
         };
         loop {
             thread::sleep(rto);
-            let mut slf = slf.lock().unwrap();
-            slf.check_timeouts();
-            let retr_timer = slf.retr_timer.lock().unwrap();
-            rto = retr_timer.rto;
-        } 
+            {
+                let mut slf = slf.lock().unwrap();
+                let current_rto = slf.retr_timer.lock().unwrap().rto;
+                let retr_segs = {
+                    let write_buf = Arc::clone(&slf.write_buf);
+                    let mut writer = write_buf.get_buf();
+                    writer.check_timeouts(current_rto)
+                };
+                for seg in retr_segs {
+                    slf.send_segment(seg.seq_num, seg.payload.clone(), seg.flags);
+                    {
+                        let mut retr_timer = slf.retr_timer.lock().unwrap();
+                        retr_timer.do_retransmission();
+                    }
+                }
+            }
+        }
     }
-
     //Sending first messages in handshake
     pub fn first_syn(slf: Arc<Mutex<Self>>) {
         let mut slf = slf.lock().unwrap();
@@ -127,16 +138,11 @@ impl ConnectionSocket {
             self.set_init_ack(tpack.header.sequence_number);
             // TODO: ABSTRACT ALL UNTIL STATE INTO EXTRINSIC FUNCTION
             {
-                let mut recv_buf = self.read_buf.get_buf();
-                let new_ack = recv_buf.add(tpack.header.sequence_number, tpack.payload.clone());
-                let mut retr_queue = self.retr_queue.lock().unwrap();
-                // Remove acknowledged packets from queue
-                if let Some(measured_rtt) = retr_queue.calculate_rtt(tpack.header.sequence_number) {
-                    let mut retr_timer = self.retr_timer.lock().unwrap();
-                    retr_timer.update_rto(measured_rtt);
-                    retr_timer.retransmission_count = 0;
+                {
+                    let mut recv_buf = self.read_buf.get_buf();
+                    let new_ack = recv_buf.add(tpack.header.sequence_number, tpack.payload.clone());
                 }
-                retr_queue.remove_acked_segments(tpack.header.sequence_number);
+                self.ack_rt(tpack.header.acknowledgment_number);
             }
             //Send response (ACK in this case) and change state
             self.send_flags(ACK);
@@ -144,21 +150,16 @@ impl ConnectionSocket {
         }
         TcpState::SynSent
     }
-    fn process_ack(&self, tpack: TcpPacket) -> TcpState {
+    fn process_ack(&mut self, tpack: TcpPacket) -> TcpState {
         println!("Processing an ack for my syn | ack");
         if has_only_flags(&tpack.header, ACK) {
             // TODO: ABSTRACT ALL UNTIL STATE INTO EXTRINSIC FUNCTION
             {
-                let mut recv_buf = self.read_buf.get_buf();
-                let new_ack = recv_buf.add(tpack.header.sequence_number, tpack.payload.clone());
-                let mut retr_queue = self.retr_queue.lock().unwrap();
-                // Remove acknowledged packets from queue
-                if let Some(measured_rtt) = retr_queue.calculate_rtt(tpack.header.sequence_number) {
-                    let mut retr_timer = self.retr_timer.lock().unwrap();
-                    retr_timer.update_rto(measured_rtt);
-                    retr_timer.retransmission_count = 0;
+                {
+                    let mut recv_buf = self.read_buf.get_buf();
+                    let new_ack = recv_buf.add(tpack.header.sequence_number, tpack.payload.clone());
                 }
-                retr_queue.remove_acked_segments(tpack.header.acknowledgment_number);
+                self.ack_rt(tpack.header.acknowledgment_number);
             }
             return TcpState::Established;
         }
@@ -168,28 +169,18 @@ impl ConnectionSocket {
         match header_flags(&tpack.header) {
             ACK if tpack.payload.len() == 0 => {
                 //Received an acknowledgement of data sent
-                let mut send_buf = self.write_buf.get_buf();
-                send_buf.ack_data(tpack.header.acknowledgment_number);
-                // Retransmission acknowledging
-                let mut recv_buf = self.read_buf.get_buf();
-                let new_ack = recv_buf.add(tpack.header.sequence_number, tpack.payload.clone());
-                self.ack_num = new_ack;
-                // Remove ack'd packets from retransmission queue
                 {
-                    let mut retr_queue = self.retr_queue.lock().unwrap();
-                    // Remove acknowledged packets from queue
-                    if let Some(measured_rtt) =
-                        retr_queue.calculate_rtt(tpack.header.sequence_number)
-                    {
-                        let mut retr_timer = self.retr_timer.lock().unwrap();
-                        retr_timer.update_rto(measured_rtt);
-                        retr_timer.retransmission_count = 0;
-                    }
-                    println!("Seq: {}", tpack.header.sequence_number);
-                    println!("Ack: {}", tpack.header.acknowledgment_number);
-
-                    retr_queue.remove_acked_segments(tpack.header.acknowledgment_number);
+                    let mut send_buf = self.write_buf.get_buf();
+                    send_buf.ack_data(tpack.header.acknowledgment_number);
                 }
+                // Retransmission acknowledging
+                {
+                    let mut recv_buf = self.read_buf.get_buf();
+                    let new_ack = recv_buf.add(tpack.header.sequence_number, tpack.payload.clone());
+                    self.ack_num = new_ack;
+                }
+                // Remove ack'd packets from retransmission queue
+                self.ack_rt(tpack.header.acknowledgment_number);
                 self.write_buf.alert_ready();
             }
             ACK => {
@@ -341,6 +332,17 @@ impl ConnectionSocket {
         let mut slf = slf.lock().unwrap();
         slf.sid = sid;
     }
+    fn ack_rt(&mut self, ack_num: u32) {
+        let mut write_buf = self.write_buf.get_buf();
+        let retr_queue = &mut write_buf.retr_queue;
+        if let Some(measured_rtt) = retr_queue.calculate_rtt(ack_num) {
+            let mut retr_timer = self.retr_timer.lock().unwrap();
+            retr_timer.update_rto(measured_rtt);
+            retr_timer.retransmission_count = 0;
+        }
+        retr_queue.remove_acked_segments(ack_num);
+    }
+
     // TODO: CLEAN UP HORRIBLE UGLY ADDING TO RETRANSMISSION QUEUE
     //
     //BUILDING AND SENDING PACKETS
@@ -389,7 +391,8 @@ impl ConnectionSocket {
         }
     }
     fn add_to_queue(&mut self, seq_num: u32, data: Vec<u8>, flags: u8) {
-        let mut retr_queue = self.retr_queue.lock().unwrap();
+        let mut write_buf = self.write_buf.get_buf();
+        let retr_queue = &mut write_buf.retr_queue;
         retr_queue.add_segment(seq_num, data.clone(), flags);
     }
     /// Takes in a TCP header and a u8 representing flags and builds a TCP packet
@@ -495,13 +498,17 @@ impl ConnectionSocket {
         //Grab proper resources from slf before relinquishing its lock
         let (write_buf, stop_probing_recver) = {
             let slf = slf.lock().unwrap();
-            (Arc::clone(&slf.write_buf), Arc::clone(&slf.stop_probing_recver))
+            (
+                Arc::clone(&slf.write_buf),
+                Arc::clone(&slf.stop_probing_recver),
+            )
         };
         let stop_probing_recver = stop_probing_recver.lock().unwrap(); //No other thread should need to use this while this thread is, so good to claim this lock for the duration of the threads existence
-        //Start data sending loop
-        //let mut snd_state = SendState::Sending;
+                                                                       //Start data sending loop
+                                                                       //let mut snd_state = SendState::Sending;
         loop {
-            let to_send = { //Get data to send
+            let to_send = {
+                //Get data to send
                 let mut writer = write_buf.get_buf();
                 writer.next_data()
             };
@@ -515,30 +522,41 @@ impl ConnectionSocket {
                     let slf_clone = Arc::clone(&slf);
                     let done_probing = Arc::new(AtomicBool::new(false));
                     let done_probing_clone = Arc::clone(&done_probing);
-                    thread::spawn(move || Self::zero_window_probe(slf_clone, probe, done_probing_clone));
+                    thread::spawn(move || {
+                        Self::zero_window_probe(slf_clone, probe, done_probing_clone)
+                    });
                     //Await signal to stop zero window probing
                     stop_probing_recver.recv().unwrap();
                     //Stop zero window probing thread and recover from probing
                     done_probing.store(true, Ordering::SeqCst);
-                    { //Account for probe packet now successfully transmitted
+                    {
+                        //Account for probe packet now successfully transmitted
                         let mut slf = slf.lock().unwrap();
                         slf.seq_num += 1;
                     }
                 }
                 NextData::NoData => {
                     //Check to see if we're just done sending
-                    if terminate_send.load(Ordering::SeqCst) { return; }
+                    if terminate_send.load(Ordering::SeqCst) {
+                        return;
+                    }
                     //Wait on stuff getting added to buffer
                     let writer = write_buf.get_buf();
                     let _writer = buf_update.wait(writer).unwrap(); //Kinda jank cuz _writer is never used, but is cleanest solution I could think of without adding some stupid boolean flag
                 }
             }
         }
-    } 
-    fn zero_window_probe(slf: Arc<Mutex<Self>>, probe_data: Vec<u8>, done_probing: Arc<AtomicBool>) {
+    }
+    fn zero_window_probe(
+        slf: Arc<Mutex<Self>>,
+        probe_data: Vec<u8>,
+        done_probing: Arc<AtomicBool>,
+    ) {
         loop {
             thread::sleep(Duration::from_millis(ZWP_TIMEOUT));
-            if done_probing.load(Ordering::SeqCst) { return } //Stop probing
+            if done_probing.load(Ordering::SeqCst) {
+                return;
+            } //Stop probing
             println!("Zero window probing: {probe_data:?}");
             let mut slf = slf.lock().unwrap();
             slf.send_probe(probe_data.clone());
@@ -553,29 +571,29 @@ impl ConnectionSocket {
         let mut recv_buf: std::sync::MutexGuard<'_, RecvBuf> = read_buf.wait();
         recv_buf.read(bytes)
     }
-    /// Method to check for timed-out segments
-    pub fn check_timeouts(&mut self) { 
-        let current_rto = { 
-            let retr_timer = self.retr_timer.lock().unwrap();
-            retr_timer.rto
-        };
-        let timed_out_segments = {
-            let mut retr_queue = self.retr_queue.lock().unwrap();
-            retr_queue.get_timed_out_segments(current_rto)
-        };
-        if !timed_out_segments.is_empty() {
-            // Handle retransmission
-            for segment in timed_out_segments {
-                // Resend the segment
-                self.send_segment(segment.seq_num, segment.payload.clone(), segment.flags);
-            }
-            // Update retransmission timer on timeout
-            {
-                let mut retr_timer = self.retr_timer.lock().unwrap();
-                retr_timer.do_retransmission();
-            }
-        }
-    }
+    // /// Method to check for timed-out segments
+    // pub fn check_timeouts(&mut self) {
+    //     let current_rto = {
+    //         let retr_timer = self.retr_timer.lock().unwrap();
+    //         retr_timer.rto
+    //     };
+    //     let timed_out_segments = {
+    //         let mut retr_queue = self.retr_queue.lock().unwrap();
+    //         retr_queue.get_timed_out_segments(current_rto)
+    //     };
+    //     if !timed_out_segments.is_empty() {
+    //         // Handle retransmission
+    //         for segment in timed_out_segments {
+    //             // Resend the segment
+    //             self.send_segment(segment.seq_num, segment.payload.clone(), segment.flags);
+    //         }
+    //         // Update retransmission timer on timeout
+    //         {
+    //             let mut retr_timer = self.retr_timer.lock().unwrap();
+    //             retr_timer.do_retransmission();
+    //         }
+    //     }
+    // }
     fn send_segment(&mut self, seq_num: u32, payload: Vec<u8>, flags: u8) {
         let mut tpack: TcpPacket = self.build_packet(payload, flags);
         tpack.header.sequence_number = seq_num;
