@@ -161,11 +161,9 @@ impl RetransmissionQueue {
         timed_out_segments
     }
     pub fn remove_acked_segments(&mut self, ack_num: u32) {
+        println!("Queue before remove: {:?}", self.queue);
         self.queue.retain(|s| s.seq_num >= ack_num);
-        println!(
-            "Removing acked segments, queue looks like: {:?}",
-            self.queue
-        );
+        println!("Queue after: {:?}", self.queue);
     }
     pub fn calculate_rtt(&self, ack_num: u32) -> Option<Duration> {
         if let Some(segment) = self.queue.iter().find(|s| s.seq_num == ack_num) {

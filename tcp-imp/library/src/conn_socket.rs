@@ -128,12 +128,12 @@ impl ConnectionSocket {
                 let new_ack = recv_buf.add(tpack.header.sequence_number, tpack.payload.clone());
                 let mut retr_queue = self.retr_queue.lock().unwrap();
                 // Remove acknowledged packets from queue
-                if let Some(measured_rtt) = retr_queue.calculate_rtt(new_ack) {
+                if let Some(measured_rtt) = retr_queue.calculate_rtt(tpack.header.sequence_number) {
                     let mut retr_timer = self.retr_timer.lock().unwrap();
                     retr_timer.update_rto(measured_rtt);
                     retr_timer.retransmission_count = 0;
                 }
-                retr_queue.remove_acked_segments(tpack.header.acknowledgment_number);
+                retr_queue.remove_acked_segments(tpack.header.sequence_number);
             }
             //Send response (ACK in this case) and change state
             self.send_flags(ACK);
@@ -150,7 +150,7 @@ impl ConnectionSocket {
                 let new_ack = recv_buf.add(tpack.header.sequence_number, tpack.payload.clone());
                 let mut retr_queue = self.retr_queue.lock().unwrap();
                 // Remove acknowledged packets from queue
-                if let Some(measured_rtt) = retr_queue.calculate_rtt(new_ack) {
+                if let Some(measured_rtt) = retr_queue.calculate_rtt(tpack.header.sequence_number) {
                     let mut retr_timer = self.retr_timer.lock().unwrap();
                     retr_timer.update_rto(measured_rtt);
                     retr_timer.retransmission_count = 0;
@@ -170,16 +170,21 @@ impl ConnectionSocket {
                 // Retransmission acknowledging
                 let mut recv_buf = self.read_buf.get_buf();
                 let new_ack = recv_buf.add(tpack.header.sequence_number, tpack.payload.clone());
+                self.ack_num = new_ack;
                 // Remove ack'd packets from retransmission queue
                 {
                     let mut retr_queue = self.retr_queue.lock().unwrap();
                     // Remove acknowledged packets from queue
-                    if let Some(measured_rtt) = retr_queue.calculate_rtt(new_ack) {
+                    if let Some(measured_rtt) =
+                        retr_queue.calculate_rtt(tpack.header.sequence_number)
+                    {
                         let mut retr_timer = self.retr_timer.lock().unwrap();
                         retr_timer.update_rto(measured_rtt);
                         retr_timer.retransmission_count = 0;
                     }
-                    println!("Removing message with ack: {}", new_ack);
+                    println!("Seq: {}", tpack.header.sequence_number);
+                    println!("Ack: {}", tpack.header.acknowledgment_number);
+
                     retr_queue.remove_acked_segments(tpack.header.acknowledgment_number);
                 }
                 self.write_buf.alert_ready();
