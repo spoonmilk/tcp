@@ -3,11 +3,11 @@ use crate::retransmission::*;
 use crate::send_recv_utils::*;
 use crate::tcp_utils::*;
 use crate::utils::*;
-//use crate::retransmission::*;
+use crate::retransmission::*;
 //TODO:
 //Get post ZWP functionality to work better (put more inside send_onwards)
 type SocketId = u16;
-const ZWP_TIMEOUT: u64 = 50000; //in millis
+const ZWP_TIMEOUT: u64 = 5000; //in millis
 
 #[derive(Debug)]
 pub struct ConnectionSocket {
@@ -55,7 +55,6 @@ impl ConnectionSocket {
         }
     }
     /// Periodically does checking/elimination/retransmission from the queue and timer
-    /*
     pub fn time_check(slf: Arc<Mutex<Self>>) {
         let mut rto = {
             let slf = slf.lock().unwrap();
@@ -69,7 +68,7 @@ impl ConnectionSocket {
             let retr_timer = slf.retr_timer.lock().unwrap();
             rto = retr_timer.rto;
         } 
-    }*/
+    }
 
     //Sending first messages in handshake
     pub fn first_syn(slf: Arc<Mutex<Self>>) {
