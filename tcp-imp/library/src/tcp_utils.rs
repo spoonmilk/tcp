@@ -11,7 +11,6 @@ pub enum TcpState {
     // Teardown things
     FinWait1,
     FinWait2,
-    Closing, 
     TimeWait,
     CloseWait,
     LastAck,

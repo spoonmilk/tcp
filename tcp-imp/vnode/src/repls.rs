@@ -158,14 +158,21 @@ impl HostRepl {
         //Continues to do this until we've read the entire file
         //Closes the connection 
     }
-    pub fn rf_handler(_backend: &HostBackend, _args: Vec<String>) -> () {
+    pub fn rf_handler(backend: &HostBackend, args: Vec<String>) -> () {
         //Sanitize input
+        let path = if let Ok(path) = Path::new(&args[0]).canonicalize() { path } else { return eprintln!("Path \"{}\" invalid", args[0]) };
+        let port = if let Ok(port) = args[1].parse::<u16>() { port } else { return eprintln!("Input port \"{}\" invalid", args[1]) };
+        //Spawn a thread to complete the file reception
+        //thread::spawn(move || Self::receive_file(backend, path, port));
         //Spawn a thread...
         //First calls backend.listen() and backend.accept(1)
         //Then loops through...
         //Calling backend.tcp_recv() and waiting to receive 1kb
         //Writing this data it into the file
         //Waits for sender to close the connection
+    }
+    fn receive_file(backend: &HostBackend, path: PathBuf, port: u16) {
+        
     }
     pub fn cl_handler(backend: &HostBackend, args: Vec<String>) -> () {
         //Sanitize input
