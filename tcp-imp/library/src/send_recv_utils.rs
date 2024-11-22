@@ -94,8 +94,7 @@ impl SendBuf {
         } else {
             //Normal data for next packet
             let greatest_constraint = cmp::min(self.rem_window as usize, MAX_MSG_SIZE);
-            let data = self.take_amount(greatest_constraint);
-            println!("Sending this data: {data:?}");
+            let data = self.take_amount(greatest_constraint); 
             self.rem_window -= data.len() as u16;
             data
         };

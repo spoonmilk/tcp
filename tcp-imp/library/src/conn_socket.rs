@@ -111,7 +111,9 @@ impl ConnectionSocket {
             let state = slf_state.clone();
             drop(slf_state);
             match state {
-                TcpState::Listening | TcpState::AwaitingRun => panic!("Connection socket should not be in state {state:?}"),
+                TcpState::Listening | TcpState::AwaitingRun => {
+                    panic!("Connection socket should not be in state {state:?}")
+                }
                 TcpState::Initialized => slf.process_syn(tpack),
                 TcpState::SynSent => slf.process_syn_ack(tpack),
                 TcpState::SynRecvd => slf.process_ack(tpack),
@@ -127,7 +129,6 @@ impl ConnectionSocket {
         let mut state = slf.state.write().unwrap();
         *state = new_state;
     }
-    //TODO: Something fishy going on with these acknowledgment numbers... hmmm
     fn process_syn(&mut self, tpack: TcpPacket) -> TcpState {
         if has_only_flags(&tpack.header, SYN) {
             //Deal with receiving first sequence number of TCP partner
@@ -143,7 +144,6 @@ impl ConnectionSocket {
         if has_only_flags(&tpack.header, SYN | ACK) {
             //Deal with receiving first sequence number of TCP partner
             self.set_init_ack(tpack.header.sequence_number);
-            // TODO: ABSTRACT ALL UNTIL STATE INTO EXTRINSIC FUNCTION
             {
                 {
                     let mut recv_buf = self.read_buf.get_buf();
@@ -160,7 +160,6 @@ impl ConnectionSocket {
     fn process_ack(&mut self, tpack: TcpPacket) -> TcpState {
         println!("Processing an ack for my syn | ack");
         if has_only_flags(&tpack.header, ACK) {
-            // TODO: ABSTRACT ALL UNTIL STATE INTO EXTRINSIC FUNCTION
             {
                 {
                     let mut recv_buf = self.read_buf.get_buf();
@@ -182,7 +181,10 @@ impl ConnectionSocket {
                 self.send_flags(ACK);
                 return TcpState::CloseWait;
             }
-            _ => eprintln!("ESTABLISHED: I got no clue how to deal with a packet that has flags: {}", header_flags(&tpack.header))
+            _ => eprintln!(
+                "ESTABLISHED: I got no clue how to deal with a packet that has flags: {}",
+                header_flags(&tpack.header)
+            ),
         }
         TcpState::Established
     }
@@ -191,20 +193,25 @@ impl ConnectionSocket {
         //Transitions to FinWait2 upon reception of an ACK for its FIN
         match header_flags(&tpack.header) {
             ACK if tpack.payload.len() == 0 => {
-                if tpack.header.acknowledgment_number == self.seq_num + 1 { //Received packet is ack for FIN we sent
+                if tpack.header.acknowledgment_number == self.seq_num + 1 {
+                    //Received packet is ack for FIN we sent
                     return TcpState::FinWait2;
-                } else { //Received packet is ack for a previous packet we sent
+                } else {
+                    //Received packet is ack for a previous packet we sent
                     self.ack(tpack)
                 }
             }
             ACK => self.absorb_and_acknowledge(tpack),
-            _ => eprintln!("FIN_WAIT_1: I shouldn't get packet with flags: {}", header_flags(&tpack.header)),
+            _ => eprintln!(
+                "FIN_WAIT_1: I shouldn't get packet with flags: {}",
+                header_flags(&tpack.header)
+            ),
         }
         TcpState::FinWait1
     }
     fn fin_wait_2_handler(&mut self, tpack: TcpPacket) -> TcpState {
         //Still accepts both acks for data sent and incoming data
-        //Transitions to TimeWiat upon reception of a FIN 
+        //Transitions to TimeWiat upon reception of a FIN
         match header_flags(&tpack.header) {
             ACK if tpack.payload.len() == 0 => self.ack(tpack),
             ACK => self.absorb_and_acknowledge(tpack),
@@ -213,7 +220,10 @@ impl ConnectionSocket {
                 self.send_flags(ACK);
                 return TcpState::TimeWait;
             }
-            _ => eprintln!("FIN_WAIT_2: I shouldn't get packet with flags: {}", header_flags(&tpack.header))
+            _ => eprintln!(
+                "FIN_WAIT_2: I shouldn't get packet with flags: {}",
+                header_flags(&tpack.header)
+            ),
         }
         TcpState::FinWait2
     }
@@ -224,7 +234,10 @@ impl ConnectionSocket {
         match header_flags(&tpack.header) {
             ACK if tpack.payload.len() == 0 => self.ack(tpack),
             ACK => eprintln!("TIME_WAIT: I shouldn't get a packet with data from my TCP partner"),
-            _ => eprintln!("TIME_WAIT: I shouldn't get packet with flags: {}", header_flags(&tpack.header)),
+            _ => eprintln!(
+                "TIME_WAIT: I shouldn't get packet with flags: {}",
+                header_flags(&tpack.header)
+            ),
         }
         TcpState::TimeWait
     }
@@ -234,7 +247,10 @@ impl ConnectionSocket {
         match header_flags(&tpack.header) {
             ACK if tpack.payload.len() == 0 => self.ack(tpack),
             ACK => eprintln!("CLOSE_WAIT: I shouldn't get a packet with data from my TCP partner"),
-            _ => eprintln!("CLOSE_WAIT: I shouldn't get packet with flags: {}", header_flags(&tpack.header)),
+            _ => eprintln!(
+                "CLOSE_WAIT: I shouldn't get packet with flags: {}",
+                header_flags(&tpack.header)
+            ),
         }
         TcpState::CloseWait
     }
@@ -246,10 +262,15 @@ impl ConnectionSocket {
                 if tpack.header.acknowledgment_number == self.seq_num + 1 {
                     self.closed_sender.send(self.sid).unwrap();
                     return TcpState::Closed;
-                } else { self.ack(tpack); }
-            },
+                } else {
+                    self.ack(tpack);
+                }
+            }
             ACK => eprintln!("LAST_ACK: I shouldn't get a packet with data from my TCP partner"),
-            _ => eprintln!("LAST_ACK: I shouldn't get packet with flags: {}", header_flags(&tpack.header)),
+            _ => eprintln!(
+                "LAST_ACK: I shouldn't get packet with flags: {}",
+                header_flags(&tpack.header)
+            ),
         }
         TcpState::LastAck
     }
@@ -264,10 +285,9 @@ impl ConnectionSocket {
     fn absorb_and_acknowledge(&mut self, tpack: TcpPacket) {
         //Absorb packet
         self.absorb_packet(tpack);
-         //Send acknowledgement for received data
-         self.send_flags(ACK);
-         println!("Acknowledged received data");
-
+        //Send acknowledgement for received data
+        self.send_flags(ACK);
+        println!("Acknowledged received data");
     }
     ///Handles adding the data from the packet to the recv buffer, incrementing ack num, and alert any receiving thread that data was added
     fn absorb_packet(&mut self, tpack: TcpPacket) {
@@ -277,26 +297,14 @@ impl ConnectionSocket {
         self.read_buf.alert_ready();
     }
     ///Handles dropping all data associated with sequence numbers less than the ack number of the packet we just received and syncing this with retransmissions
-    fn ack(&self, tpack: TcpPacket) {
+    fn ack(&mut self, tpack: TcpPacket) {
         //Ack data internally within the send buffer
-        let mut send_buf = self.write_buf.get_buf();
-        send_buf.ack_data(tpack.header.acknowledgment_number);
+        {
+            let mut send_buf = self.write_buf.get_buf();
+            send_buf.ack_data(tpack.header.acknowledgment_number);
+        }
         // Remove ack'd packets from retransmission queue
-        /*{
-            let mut retr_queue = self.retr_queue.lock().unwrap();
-            // Remove acknowledged packets from queue
-            if let Some(measured_rtt) =
-                retr_queue.calculate_rtt(tpack.header.sequence_number)
-            {
-                let mut retr_timer = self.retr_timer.lock().unwrap();
-                retr_timer.update_rto(measured_rtt);
-                retr_timer.retransmission_count = 0;
-            }
-            println!("Seq: {}", tpack.header.sequence_number);
-            println!("Ack: {}", tpack.header.acknowledgment_number);
-
-            retr_queue.remove_acked_segments(tpack.header.acknowledgment_number);
-        }*/
+        self.ack_rt(tpack.header.acknowledgment_number);
     }
 
     //SETUP FINISHERS
@@ -320,8 +328,8 @@ impl ConnectionSocket {
         if let Some(measured_rtt) = retr_queue.calculate_rtt(ack_num) {
             println!("Time until return: {}", measured_rtt.as_millis());
             let mut retr_timer = self.retr_timer.lock().unwrap();
-            retr_timer.reset();
             retr_timer.update_rto(measured_rtt);
+            retr_timer.reset();
         }
         retr_queue.remove_acked_segments(ack_num);
     }

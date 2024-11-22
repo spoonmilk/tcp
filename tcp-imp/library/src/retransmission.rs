@@ -91,12 +91,19 @@ impl RetransmissionTimer {
             self.rto = self.max_rto;
         }
     }
-    pub fn reset(&mut self) {
+    pub fn reset(&mut self) { 
         self.retransmission_count = 0;
-        self.rto = Duration::from_millis(MIN_RTO);
-        self.rttvar = None;
-        self.srtt = None;
+        // Recalculate RTO based on current srtt and rttvar
+        if let (Some(srtt), Some(rttvar)) = (self.srtt, self.rttvar) {
+            let rto_secs = srtt.as_secs_f64() + 4.0 * rttvar.as_secs_f64();
+            self.rto = Duration::from_secs_f64(rto_secs);
+            self.rto = self.rto.clamp(self.min_rto, self.max_rto);
+        } else {
+            // If no RTT measurements yet, set RTO to initial value
+            self.rto = Duration::from_millis(MIN_RTO);
+        }
     }
+    
 }
 
 #[derive(Debug, Clone)]
@@ -161,15 +168,15 @@ impl RetransmissionQueue {
         timed_out_segments
     }
     pub fn remove_acked_segments(&mut self, ack_num: u32) {
-        println!("Queue before remove: {:?}", self.queue);
+        println!("Removing segments with seq: {}", ack_num);
         self.queue.retain(|s| s.seq_num >= ack_num);
-        println!("Queue after: {:?}", self.queue);
     }
     pub fn calculate_rtt(&self, ack_num: u32) -> Option<Duration> {
-        if let Some(segment) = self.queue.iter().find(|s| s.seq_num == ack_num) {
+        // Find the oldest unacknowledged segment that is being acknowledged by ack_num
+        if let Some(segment) = self.queue.iter().find(|s| s.seq_num < ack_num) {
             Some(Instant::now().duration_since(segment.time_of_send))
         } else {
             None
         }
-    }
+    }    
 }
