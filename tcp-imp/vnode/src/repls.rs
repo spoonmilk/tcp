@@ -11,8 +11,18 @@ use std::thread;
 use std::sync::mpsc::Receiver;
 use std::sync::Arc;
 use std::fs::File;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+
+//TODO:
+//Make send and receive error when called on closed sockets
+//Change internal sid assignment to not be based on table length - DONE
+//Change send file to spawn a thread - DONE
+//Make both send file and receive file print bytes sent and received - DONE
+//Retransmitting closing related packets
+//Finish TimeWait
+//Test retransmissions and ZWP together and with closing (test send/receive file)
+//Run performance test
 
 const READ_CHUNK: usize = 1024;
 
@@ -124,6 +134,18 @@ impl HostRepl {
         };
         let ip_addr = if let Ok(ip_addr) = args[1].parse::<Ipv4Addr>() { ip_addr } else { return eprintln!("Input IP address \"{}\" invalid", args[1]) };
         let port = if let Ok(port) = args[2].parse::<u16>() { port } else { return eprintln!("Input port \"{}\" invalid", args[2]) };
+        //Spawn thread to do the actual sending
+        let backend_clone = backend.clone(); //Again, kinda kludgy, but best we can do at the moment
+        thread::spawn(move || Self::send_file(backend_clone, filepath, ip_addr, port));
+        //Spawn a thread that...
+        //First calls backend.connect() on ip address and port number
+        //Then loops through... 
+        //Reading 1kb of the file 
+        //Calling backend.tcp_send() on the data and waiting for it to finish
+        //Continues to do this until we've read the entire file
+        //Closes the connection 
+    }
+    fn send_file(backend: HostBackend, filepath: PathBuf, ip_addr: Ipv4Addr, port: u16) {
         // Open the file
         let mut file = match File::open(filepath) {
             Ok(file) => file,
@@ -138,7 +160,8 @@ impl HostRepl {
            None => return eprintln!("Unable to find connection socket"),
            Some(sid) => sid 
         };
-
+        //Let the sending begin!
+        let mut total_bytes_sent = 0; 
         loop {
             let bytes_read = file.read(&mut buf).unwrap();
             if bytes_read == 0 {
@@ -148,31 +171,33 @@ impl HostRepl {
                 Ok(_) => (),
                 Err(e) => println!("{}", e.to_string())
             };
+            total_bytes_sent += bytes_read;
         }
+        println!("Sent {total_bytes_sent} bytes");
 
-        //Spawn a thread that...
-        //First calls backend.connect() on ip address and port number
-        //Then loops through... 
-        //Reading 1kb of the file 
-        //Calling backend.tcp_send() on the data and waiting for it to finish
-        //Continues to do this until we've read the entire file
-        //Closes the connection 
     }
     pub fn rf_handler(backend: &HostBackend, args: Vec<String>) -> () {
         //Sanitize input
         let path = if let Ok(path) = Path::new(&args[0]).canonicalize() { path } else { return eprintln!("Path \"{}\" invalid", args[0]) };
         let port = if let Ok(port) = args[1].parse::<u16>() { port } else { return eprintln!("Input port \"{}\" invalid", args[1]) };
         //Spawn a thread to complete the file reception
-        //thread::spawn(move || Self::receive_file(backend, path, port));
-        //Spawn a thread...
-        //First calls backend.listen() and backend.accept(1)
-        //Then loops through...
-        //Calling backend.tcp_recv() and waiting to receive 1kb
-        //Writing this data it into the file
-        //Waits for sender to close the connection
+        let backend_clone = backend.clone(); //Kinda kludgy, but best I could come up with without major changes
+        thread::spawn(move || Self::receive_file(backend_clone, path, port));
     }
-    fn receive_file(backend: &HostBackend, path: PathBuf, port: u16) {
-        
+    fn receive_file(backend: HostBackend, path: PathBuf, port: u16) {
+        let listen_sid = backend.listen(port);
+        let sid =  backend.accept1(port).expect("No listener socket with input port found...");
+        backend.close(listen_sid).expect("No listener at the sid we just got back from listen()"); //Close the listener socket
+        let mut file = File::create(path).expect("Unable to open file with path: {path:?}");
+        let mut total_bytes_read = 0;
+        loop {
+            let data = backend.tcp_recieve(sid, READ_CHUNK as u16).expect("No socket at the sid we just got back from accept1()...");
+            if data.len() == 0 { break; } //Should only happen if connection is closing
+            file.write_all(&data).unwrap();
+            total_bytes_read += data.len();
+        }
+        backend.close(sid).expect("No socket at the sid we just got back from accept1()...");
+        println!("Read {total_bytes_read} bytes");
     }
     pub fn cl_handler(backend: &HostBackend, args: Vec<String>) -> () {
         //Sanitize input

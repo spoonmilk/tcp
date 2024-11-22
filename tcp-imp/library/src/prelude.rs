@@ -3,7 +3,7 @@ pub use std::collections::HashMap;
 pub use std::io::{Error, ErrorKind, Result};
 pub use std::result;
 pub use std::thread;
-pub use std::sync::{Condvar, Arc, Mutex, atomic::{Ordering, AtomicBool}, mpsc::{channel, Sender, Receiver, TryRecvError, SendError}, RwLock, RwLockReadGuard, RwLockWriteGuard};
+pub use std::sync::{Condvar, Arc, Mutex, atomic::{Ordering, AtomicBool, AtomicU16}, mpsc::{channel, Sender, Receiver, TryRecvError, SendError}, RwLock, RwLockReadGuard, RwLockWriteGuard};
 pub use etherparse::{Ipv4Header, TcpHeader, IpNumber};
 pub use lnxparser::{IPConfig, InterfaceConfig, NeighborConfig, RoutingType, StaticRoute};
 pub use ipnet::Ipv4Net;

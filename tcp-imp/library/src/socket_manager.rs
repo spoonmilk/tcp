@@ -8,13 +8,14 @@ pub struct SocketManager {
     socket_table: Arc<RwLock<SocketTable>>,
     listener_table: ListenerTable,
     closed_sender: Arc<Sender<SocketId>>,
-    ip_sender: Arc<Sender<PacketBasis>>
+    ip_sender: Arc<Sender<PacketBasis>>, 
+    sid_assigner: Arc<SidAssigner>
 }
 
 impl SocketManager {
     /// Create a new SocketManager, listener table initially empty
-    pub fn new(socket_table: Arc<RwLock<SocketTable>>, closed_sender: Arc<Sender<SocketId>>, ip_sender: Arc<Sender<PacketBasis>>) -> SocketManager {
-        SocketManager { socket_table, listener_table: HashMap::new(), closed_sender, ip_sender }
+    pub fn new(socket_table: Arc<RwLock<SocketTable>>, closed_sender: Arc<Sender<SocketId>>, ip_sender: Arc<Sender<PacketBasis>>, sid_assigner: Arc<SidAssigner>) -> SocketManager {
+        SocketManager { socket_table, listener_table: HashMap::new(), closed_sender, ip_sender, sid_assigner }
     } 
     /// Initialize connection socket for incoming packet and either add it to pending connections for listener or add it to socket table
     pub fn handle_incoming(&mut self, pack: Packet, port: u16) -> () {
@@ -31,17 +32,17 @@ impl SocketManager {
         self.listener_recv(port, head, tcp_pack);
     }
     /// Adds a listener to the listener table and socket table
-    pub fn listen(&mut self, port: u16) -> () {
+    pub fn listen(&mut self, port: u16) -> SocketId {
+        {
+            self.listener_table.insert(port, ListenerEntry::new());
+        }
         {
             let mut socket_table = self.socket_table.write().unwrap();
-            let sid = socket_table.len() as u16;
+            let sid = socket_table.len() as u16; //THIS TOO
             let sock_listen_ent = ListenEntry::new(port);
             let listen_ent = SocketEntry::Listener(sock_listen_ent);
             socket_table.insert(sid, listen_ent);
-        }
-
-        {
-            self.listener_table.insert(port, ListenerEntry::new());
+            return sid
         }
     }
     /// Opens a listener on <port> to accepting new connections
@@ -51,10 +52,31 @@ impl SocketManager {
             Some(listener) => {
                 listener.accepting = true;
                 let mut sock_table = self.socket_table.write().unwrap();
-                listener.pending_connections.drain(..).for_each(|pd_conn| { pd_conn.start(&mut sock_table); });
+                let sid = self.sid_assigner.assign_sid();
+                listener.pending_connections.drain(..).for_each(|pd_conn| { pd_conn.start(&mut sock_table, sid); });
             },
             None => return // Listener was closed in the before this function got c
         };
+    }
+    pub fn accept1(&mut self, port: u16) -> Option<Receiver<Arc<Mutex<ConnectionSocket>>>> {
+        let listener_table = &mut self.listener_table;
+        match listener_table.get_mut(&port) {
+            Some(listener) => {
+                let (sock_send, sock_recv) = channel::<Arc<Mutex<ConnectionSocket>>>();
+                if listener.pending_connections.len() > 0 { //Just take the first pending connection
+                    let pd_conn = listener.pending_connections.remove(0);
+                    let mut sock_table = self.socket_table.write().unwrap();
+                    let sid = self.sid_assigner.assign_sid();
+                    let sock = pd_conn.start(&mut sock_table, sid);
+                    sock_send.send(sock).expect("Error sending arc of sock to receiver");
+                } else { //No pending connections, so just say we are open to them for now
+                    listener.accepting = true;
+                    listener.sock_send = Some(sock_send);
+                }
+                Some(sock_recv)
+            },
+            None => None // Listener was closed in the before this function got c
+        }
     }
     /// Upon receiving a 'listen' command from the REPL, creates a new listener socket and adds it to the listener table
     /// Also adds a new entry to the socket table to represent the listener socket
@@ -77,9 +99,18 @@ impl SocketManager {
         //Decide whether to immediately start connection or stash it for later depending on whether the listener is accepting
         match listener.accepting {
             true => {
-                let mut sock_table = self.socket_table.write().unwrap();
-                let sock = pending_conn.start(&mut sock_table); //Technically, if we wanted to be fully faithful to a true socket API, we would set accepting back to false here, but this doesn't actually need to happen, so...
+                let sock = {
+                    let mut sock_table = self.socket_table.write().unwrap();
+                    let sid = self.sid_assigner.assign_sid();
+                    pending_conn.start(&mut sock_table, sid) 
+                };
+                let sock_clone = Arc::clone(&sock); //potentially needed later
                 ConnectionSocket::handle_packet(sock, tcp_pack, ip_head); //Sends SYN + ACK message
+                if let Some(sock_send) = &listener.sock_send { //Accept1 was called earlier
+                    sock_send.send(sock_clone).expect("Error sending arc of socket to receiver");
+                    listener.accepting = false;
+                    listener.sock_send = None;
+                }
             }
             false => listener.pending_connections.push(pending_conn)
         }

@@ -12,6 +12,7 @@ pub enum  Backend {
     Router(RouterBackend)
 }
 
+#[derive(Clone)]
 pub struct HostBackend {
     interface_reps: Arc<RwLock<InterfaceTable>>,
     forwarding_table: Arc<RwLock<ForwardingTable>>,
@@ -19,7 +20,8 @@ pub struct HostBackend {
     pub socket_manager: Arc<Mutex<SocketManager>>, //Just pub for REPL - once IpHandler is made by config this goes away
     local_ip: Ipv4Addr,
     closed_sender: Arc<Sender<SocketId>>,
-    ip_sender: Arc<Sender<PacketBasis>>
+    ip_sender: Arc<Sender<PacketBasis>>,
+    sid_assigner: Arc<SidAssigner>
 }
 
 impl VnodeBackend for HostBackend {
@@ -36,11 +38,12 @@ impl HostBackend {
         let ip_sender = Arc::new(ip_sender);
         let (closed_send, closed_recv) = channel::<SocketId>();
         let closed_sender = Arc::new(closed_send);
-        let socket_manager =  SocketManager::new(Arc::clone(&socket_table), Arc::clone(&closed_sender), Arc::clone(&ip_sender));
+        let sid_assigner: Arc<SidAssigner> = Arc::new(SidAssigner::new());
+        let socket_manager =  SocketManager::new(Arc::clone(&socket_table), Arc::clone(&closed_sender), Arc::clone(&ip_sender), Arc::clone(&sid_assigner));
         let socket_manager = Arc::new(Mutex::new(socket_manager));
         let socket_table_clone = Arc::clone(&socket_table);
         thread::spawn(move || Self::check_closed(socket_table_clone, closed_recv));
-        HostBackend { interface_reps, forwarding_table, socket_table, socket_manager, local_ip, closed_sender, ip_sender }
+        HostBackend { interface_reps, forwarding_table, socket_table, socket_manager, local_ip, closed_sender, ip_sender, sid_assigner }
     }
     pub fn socket_table(&self) -> RwLockReadGuard<SocketTable> { self.socket_table.read().unwrap() }
     fn socket_table_mut(&self) -> RwLockWriteGuard<SocketTable> { self.socket_table.write().unwrap() }
@@ -52,8 +55,19 @@ impl HostBackend {
             None => None
         }
     }
-    pub fn listen(&self, port: u16) -> () { self.socket_manager.lock().unwrap().listen(port); }
+    pub fn listen(&self, port: u16) -> SocketId { self.socket_manager.lock().unwrap().listen(port) }
     pub fn accept(&self, port: u16) -> () { self.socket_manager.lock().unwrap().accept(port); }
+    pub fn accept1(&self, port: u16) -> Option<SocketId> { 
+        let conn_wait = {
+            let mut sock_man = self.socket_manager.lock().unwrap();
+            sock_man.accept1(port) //Doesn't block 
+        };
+        if let Some(conn_wait) = conn_wait {
+            let sock_arc = conn_wait.recv().expect("Error receiving arc of socket from sender");
+            let sid = ConnectionSocket::get_sid(sock_arc);
+            Some(sid)
+        } else { None }
+    }
     pub fn connect(&self, ip_addr: Ipv4Addr, port: u16) -> () { self.init_new_conn(ip_addr, port); }
     fn init_new_conn(&self, dst_vip: Ipv4Addr, dst_port: u16) -> () {
         let conn_src_addr = self.unused_tcp_addr();
@@ -63,7 +77,8 @@ impl HostBackend {
         let conn_sock = ConnectionSocket::new(init_state, conn_src_addr.clone(), conn_dst_addr.clone(), Arc::clone(&self.closed_sender), Arc::clone(&self.ip_sender));
         let pending_conn = PendingConn::new(conn_sock);
         let mut socket_table = self.socket_table_mut();
-        let sock = pending_conn.start(&mut socket_table); 
+        let sid = self.sid_assigner.assign_sid();
+        let sock = pending_conn.start(&mut socket_table, sid); 
         ConnectionSocket::first_syn(sock); //Sends SYN message to start handshaked
     }
     /// Generates a new unused TCP address on the local IP

@@ -52,6 +52,11 @@ impl ConnectionSocket {
             // retr_queue: Arc::new(Mutex::new(RetransmissionQueue::new())),
         }
     }
+    ///Returns input socket's sid
+    pub fn get_sid(slf: Arc<Mutex<Self>>) -> SocketId {
+        let slf = slf.lock().unwrap();
+        slf.sid
+    } 
     /// Periodically does checking/elimination/retransmission from the queue and timer
     pub fn time_check(slf: Arc<Mutex<Self>>) {
         let rto = {
@@ -160,13 +165,7 @@ impl ConnectionSocket {
         if has_only_flags(&tpack.header, SYN | ACK) {
             //Deal with receiving first sequence number of TCP partner
             self.set_init_ack(tpack.header.sequence_number);
-            {
-                {
-                    let mut recv_buf = self.read_buf.get_buf();
-                    let new_ack = recv_buf.add(tpack.header.sequence_number, tpack.payload.clone());
-                }
-                self.ack_rt(tpack.header.acknowledgment_number);
-            }
+            self.ack_rt(tpack.header.acknowledgment_number);
             //Send response (ACK in this case) and change state
             self.send_flags(ACK);
             return TcpState::Established;
@@ -176,13 +175,7 @@ impl ConnectionSocket {
     fn process_ack(&mut self, tpack: TcpPacket) -> TcpState {
         println!("Processing an ack for my syn | ack");
         if has_only_flags(&tpack.header, ACK) {
-            {
-                {
-                    let mut recv_buf = self.read_buf.get_buf();
-                    let new_ack = recv_buf.add(tpack.header.sequence_number, tpack.payload.clone());
-                }
-                self.ack_rt(tpack.header.acknowledgment_number);
-            }
+            self.ack_rt(tpack.header.acknowledgment_number);
             return TcpState::Established;
         }
         TcpState::SynRecvd
@@ -195,6 +188,7 @@ impl ConnectionSocket {
                 //Other dude wants to close the connection
                 // Okay! I will close!
                 self.send_flags(ACK);
+                self.read_buf.alert_ready(); //Tells any running receive thread that we can't receive anymore
                 return TcpState::CloseWait;
             }
             _ => eprintln!(
@@ -276,7 +270,7 @@ impl ConnectionSocket {
         match header_flags(&tpack.header) {
             ACK if tpack.payload.len() == 0 => {
                 if tpack.header.acknowledgment_number == self.seq_num + 1 {
-                    self.closed_sender.send(self.sid).unwrap();
+                    self.enter_closed();
                     return TcpState::Closed;
                 } else {
                     self.ack(tpack);
@@ -321,6 +315,9 @@ impl ConnectionSocket {
         }
         // Remove ack'd packets from retransmission queue
         self.ack_rt(tpack.header.acknowledgment_number);
+    }
+    fn enter_closed(&self) {
+        self.closed_sender.send(self.sid).unwrap();
     }
 
     //SETUP FINISHERS

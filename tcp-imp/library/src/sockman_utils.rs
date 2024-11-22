@@ -6,6 +6,20 @@ pub type SocketId = u16;
 pub type SocketTable = HashMap<SocketId, SocketEntry>;
 pub type ListenerTable = HashMap<u16, ListenerEntry>;
 
+pub struct SidAssigner {
+    next_sid: AtomicU16
+}
+impl SidAssigner {
+    pub fn new() -> SidAssigner {
+        SidAssigner { next_sid: AtomicU16::new(0) }
+    }
+    pub fn assign_sid(&self) -> SocketId {
+        let sid = self.next_sid.load(Ordering::SeqCst);
+        self.next_sid.store(sid + 1, Ordering::SeqCst);
+        sid
+    }
+}
+
 #[derive(Debug)]
 pub enum SocketEntry {
     Connection(ConnectionEntry),
@@ -39,12 +53,14 @@ impl ListenEntry {
 pub struct ListenerEntry {
     pub accepting: bool,
     pub pending_connections: Vec<PendingConn>,
+    pub sock_send: Option<Sender<Arc<Mutex<ConnectionSocket>>>> //This is so cursed wtf
 }
 impl ListenerEntry {
     pub fn new() -> ListenerEntry {
         ListenerEntry {
             accepting: false,
             pending_connections: Vec::new(),
+            sock_send: None //Initially None - will become Some(<sender>) when accept1() gets called 
         }
     }
 }
@@ -59,12 +75,8 @@ impl PendingConn {
         PendingConn { sock }
     }
     /// Takes in a pending connection and adds it to the SocketTable before returning a pointer to that socket
-    pub fn start(
-        self,
-        socket_table: &mut RwLockWriteGuard<SocketTable>,
-    ) -> Arc<Mutex<ConnectionSocket>> {
+    pub fn start(self, socket_table: &mut RwLockWriteGuard<SocketTable>, sid: SocketId) -> Arc<Mutex<ConnectionSocket>> {
         //Create entry on socket table and add it
-        let sid = socket_table.len() as SocketId; //TODO: Change this to use an internal counter
         let src_addr = (&self.sock.src_addr).clone();
         let dst_addr = (&self.sock.dst_addr).clone();
         let state = Arc::clone(&self.sock.state);
