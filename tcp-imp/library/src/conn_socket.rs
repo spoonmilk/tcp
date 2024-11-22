@@ -1,6 +1,5 @@
 use crate::prelude::*;
 use crate::retransmission::*;
-use crate::retransmission::*;
 use crate::send_recv_utils::*;
 use crate::tcp_utils::*;
 use crate::utils::*;
@@ -71,7 +70,7 @@ impl ConnectionSocket {
                     writer.check_timeouts(current_rto)
                 };
                 for seg in retr_segs {
-                    slf.send_segment(seg.seq_num, seg.payload.clone(), seg.flags);
+                    slf.send_segment(seg.seq_num, seg.payload.clone(), seg.flags, seg.checksum);
                     {
                         let mut retr_timer = slf.retr_timer.lock().unwrap();
                         retr_timer.do_retransmission();
@@ -92,7 +91,7 @@ impl ConnectionSocket {
     //
     //HANDLING INCOMING PACKETS
     //
-    //TODO: Handle checking TCP Checksum upon reception of a packet
+    //TODO: Clean this ugly ass function up
     pub fn handle_packet(slf: Arc<Mutex<Self>>, tpack: TcpPacket, ip_head: Ipv4Header) {
         //let slf_clone = Arc::clone(&slf); //Needed for zero window probing
         let mut slf = slf.lock().unwrap();
@@ -100,7 +99,7 @@ impl ConnectionSocket {
         if has_flags(&tpack.header, RST) {
             panic!("Received RST packet");
         } //Panics if RST flag received
-        //TODO: Get rid of clone, but I'm tired and lazy - will fix later - Alex
+          //TODO: Get rid of clone, but I'm tired and lazy - will fix later - Alex
         if !slf.check_tcp_checksum(tpack.clone(), ip_head) {
             eprintln!("Received packet with bad checksum, dropping.");
             return;
@@ -110,7 +109,7 @@ impl ConnectionSocket {
             let mut write_buf = slf.write_buf.get_buf();
             write_buf.update_window(tpack.header.window_size);
         }
-        //State specific packet recpetion actions
+        //State specific packet reception actions
         let new_state = {
             let slf_state = slf.state.read().unwrap();
             let state = slf_state.clone();
@@ -136,8 +135,7 @@ impl ConnectionSocket {
     }
     /// Checks if a tcp packet complies to the TCP protocol checksum
     fn check_tcp_checksum(&mut self, tpack: TcpPacket, ip_head: Ipv4Header) -> bool {
-        //TODO: Implement TCP checksum check
-        let proper_checksum = { 
+        let proper_checksum = {
             match tpack.header.calc_checksum_ipv4(&ip_head, &tpack.payload) {
                 Ok(checksum) => checksum,
                 Err(_) => panic!("Error in checksum calculation"),
@@ -306,7 +304,7 @@ impl ConnectionSocket {
         //Send acknowledgement for received data
         self.send_flags(ACK);
         println!("Acknowledged received data");
-    } 
+    }
     ///Handles adding the data from the packet to the recv buffer, incrementing ack num, and alert any receiving thread that data was added
     fn absorb_packet(&mut self, tpack: TcpPacket) {
         let mut recv_buf = self.read_buf.get_buf();
@@ -375,6 +373,7 @@ impl ConnectionSocket {
                     packet.header.sequence_number.clone(),
                     packet.payload.clone(),
                     ACK,
+                    packet.header.checksum,
                 );
                 self.seq_num += data_length as u32;
             }
@@ -399,10 +398,10 @@ impl ConnectionSocket {
             Err(e) => Err(e),
         }
     }
-    fn add_to_queue(&mut self, seq_num: u32, data: Vec<u8>, flags: u8) {
+    fn add_to_queue(&mut self, seq_num: u32, data: Vec<u8>, flags: u8, checksum: u16) {
         let mut write_buf = self.write_buf.get_buf();
         let retr_queue = &mut write_buf.retr_queue;
-        retr_queue.add_segment(seq_num, data.clone(), flags);
+        retr_queue.add_segment(seq_num, data.clone(), flags, checksum);
     }
     /// Takes in a TCP header and a u8 representing flags and builds a TCP packet
     fn build_packet(&self, payload: Vec<u8>, flags: u8) -> TcpPacket {
@@ -421,7 +420,6 @@ impl ConnectionSocket {
             .calc_checksum_ipv4_raw(src_ip, dst_ip, payload.as_slice())
             .expect("Checksum calculation failed");
         tcp_header.checksum = checksum;
-        println!("Checksum is: {}", checksum);
         return TcpPacket {
             header: tcp_header,
             payload,
@@ -581,31 +579,12 @@ impl ConnectionSocket {
         let mut recv_buf: std::sync::MutexGuard<'_, RecvBuf> = read_buf.wait();
         recv_buf.read(bytes)
     }
-    // /// Method to check for timed-out segments
-    // pub fn check_timeouts(&mut self) {
-    //     let current_rto = {
-    //         let retr_timer = self.retr_timer.lock().unwrap();
-    //         retr_timer.rto
-    //     };
-    //     let timed_out_segments = {
-    //         let mut retr_queue = self.retr_queue.lock().unwrap();
-    //         retr_queue.get_timed_out_segments(current_rto)
-    //     };
-    //     if !timed_out_segments.is_empty() {
-    //         // Handle retransmission
-    //         for segment in timed_out_segments {
-    //             // Resend the segment
-    //             self.send_segment(segment.seq_num, segment.payload.clone(), segment.flags);
-    //         }
-    //         // Update retransmission timer on timeout
-    //         {
-    //             let mut retr_timer = self.retr_timer.lock().unwrap();
-    //             retr_timer.do_retransmission();
-    //         }
-    //     }
-    // }
-    fn send_segment(&mut self, seq_num: u32, payload: Vec<u8>, flags: u8) {
+    fn send_segment(&mut self, seq_num: u32, payload: Vec<u8>, flags: u8, checksum: u16) {
+        let my_payload = String::from_utf8(payload.clone()).unwrap();
+        println!("Retransmitting payload: {}", my_payload);
         let mut tpack: TcpPacket = self.build_packet(payload, flags);
+        println!("Packet ack num: {}", tpack.header.acknowledgment_number);
+        tpack.header.checksum = checksum;
         tpack.header.sequence_number = seq_num;
         let pbasis = self.packet_basis(tpack);
         match self.ip_sender.send(pbasis) {

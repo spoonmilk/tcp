@@ -91,7 +91,7 @@ impl RetransmissionTimer {
             self.rto = self.max_rto;
         }
     }
-    pub fn reset(&mut self) { 
+    pub fn reset(&mut self) {
         self.retransmission_count = 0;
         // Recalculate RTO based on current srtt and rttvar
         if let (Some(srtt), Some(rttvar)) = (self.srtt, self.rttvar) {
@@ -103,7 +103,6 @@ impl RetransmissionTimer {
             self.rto = Duration::from_millis(MIN_RTO);
         }
     }
-    
 }
 
 #[derive(Debug, Clone)]
@@ -112,16 +111,18 @@ pub struct RetrSegment {
     pub payload: Vec<u8>,
     pub flags: u8,
     time_of_send: Instant,
+    pub checksum: u16,
 }
 
 impl RetrSegment {
     /// Creates a new retransmission segment
-    pub fn new(seq_num: u32, data: Vec<u8>, flags: u8) -> RetrSegment {
+    pub fn new(seq_num: u32, data: Vec<u8>, flags: u8, checksum: u16) -> RetrSegment {
         RetrSegment {
             seq_num,
             payload: data,
             flags,
             time_of_send: Instant::now(),
+            checksum,
         }
     }
     /// Checks if a retransmission segment has timed out
@@ -147,8 +148,8 @@ impl RetransmissionQueue {
         }
     }
     /// Adds a retransmission segment to the queue
-    pub fn add_segment(&mut self, seq_num: u32, data: Vec<u8>, flags: u8) {
-        let segment = RetrSegment::new(seq_num, data, flags);
+    pub fn add_segment(&mut self, seq_num: u32, data: Vec<u8>, flags: u8, checksum: u16) {
+        let segment = RetrSegment::new(seq_num, data, flags, checksum);
         self.queue.push_back(segment);
     }
     pub fn mark_sent(&mut self, seq_num: u32) {
@@ -178,5 +179,5 @@ impl RetransmissionQueue {
         } else {
             None
         }
-    }    
+    }
 }
