@@ -26,7 +26,6 @@ pub struct ConnectionSocket {
     // retr_queue: Arc<Mutex<RetransmissionQueue>>,
 }
 
-//TODO: deal with handshake timeouts
 impl ConnectionSocket {
     pub fn new(
         state: Arc<RwLock<TcpState>>,
@@ -93,13 +92,19 @@ impl ConnectionSocket {
     //
     //HANDLING INCOMING PACKETS
     //
-    pub fn handle_packet(slf: Arc<Mutex<Self>>, tpack: TcpPacket) {
+    //TODO: Handle checking TCP Checksum upon reception of a packet
+    pub fn handle_packet(slf: Arc<Mutex<Self>>, tpack: TcpPacket, ip_head: Ipv4Header) {
         //let slf_clone = Arc::clone(&slf); //Needed for zero window probing
         let mut slf = slf.lock().unwrap();
         //Universal packet reception actions
         if has_flags(&tpack.header, RST) {
             panic!("Received RST packet");
         } //Panics if RST flag received
+        //TODO: Get rid of clone, but I'm tired and lazy - will fix later - Alex
+        if !slf.check_tcp_checksum(tpack.clone(), ip_head) {
+            eprintln!("Received packet with bad checksum, dropping.");
+            return;
+        }
         {
             //Update (remote) window size
             let mut write_buf = slf.write_buf.get_buf();
@@ -129,6 +134,17 @@ impl ConnectionSocket {
         let mut state = slf.state.write().unwrap();
         *state = new_state;
     }
+    /// Checks if a tcp packet complies to the TCP protocol checksum
+    fn check_tcp_checksum(&mut self, tpack: TcpPacket, ip_head: Ipv4Header) -> bool {
+        //TODO: Implement TCP checksum check
+        let proper_checksum = { 
+            match tpack.header.calc_checksum_ipv4(&ip_head, &tpack.payload) {
+                Ok(checksum) => checksum,
+                Err(_) => panic!("Error in checksum calculation"),
+            }
+        };
+        proper_checksum == tpack.header.checksum
+    }
     fn process_syn(&mut self, tpack: TcpPacket) -> TcpState {
         if has_only_flags(&tpack.header, SYN) {
             //Deal with receiving first sequence number of TCP partner
@@ -139,6 +155,8 @@ impl ConnectionSocket {
         }
         panic!("Hmm, process_syn was called for a packet that was not SYN - check listener_recv()")
     }
+    //NOTE: For William: Should new_ack do anything here? if not, you can just remove everything
+    //except ack_rt :)
     fn process_syn_ack(&mut self, tpack: TcpPacket) -> TcpState {
         println!("Processing a syn | ack for my ack");
         if has_only_flags(&tpack.header, SYN | ACK) {
@@ -288,7 +306,7 @@ impl ConnectionSocket {
         //Send acknowledgement for received data
         self.send_flags(ACK);
         println!("Acknowledged received data");
-    }
+    } 
     ///Handles adding the data from the packet to the recv buffer, incrementing ack num, and alert any receiving thread that data was added
     fn absorb_packet(&mut self, tpack: TcpPacket) {
         let mut recv_buf = self.read_buf.get_buf();
@@ -403,6 +421,7 @@ impl ConnectionSocket {
             .calc_checksum_ipv4_raw(src_ip, dst_ip, payload.as_slice())
             .expect("Checksum calculation failed");
         tcp_header.checksum = checksum;
+        println!("Checksum is: {}", checksum);
         return TcpPacket {
             header: tcp_header,
             payload,

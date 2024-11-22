@@ -79,7 +79,7 @@ impl SocketManager {
             true => {
                 let mut sock_table = self.socket_table.write().unwrap();
                 let sock = pending_conn.start(&mut sock_table); //Technically, if we wanted to be fully faithful to a true socket API, we would set accepting back to false here, but this doesn't actually need to happen, so...
-                ConnectionSocket::handle_packet(sock, tcp_pack); //Sends SYN + ACK message
+                ConnectionSocket::handle_packet(sock, tcp_pack, ip_head); //Sends SYN + ACK message
             }
             false => listener.pending_connections.push(pending_conn)
         }

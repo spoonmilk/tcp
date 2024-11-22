@@ -276,7 +276,6 @@ pub trait VnodeIpDaemon {
         if ttl == 0 {
             return false;
         }
-
         // Obtain checksum, check if correct calculation
         let checksum = pack_head.header_checksum;
         let checksum_correct = pack_head.calc_header_checksum();

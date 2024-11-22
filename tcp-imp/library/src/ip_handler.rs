@@ -37,7 +37,7 @@ impl IpHandler {
                 match sock_entry {
                     SocketEntry::Connection(ent) => {
                         let sock = Arc::clone(&ent.sock);
-                        thread::spawn(move || ConnectionSocket::handle_packet(sock, tpack));
+                        thread::spawn(move || ConnectionSocket::handle_packet(sock, tpack, pack.header));
                     },
                     SocketEntry::Listener(ent) => { //Blegh, ownership
                         let port = ent.port.clone();
