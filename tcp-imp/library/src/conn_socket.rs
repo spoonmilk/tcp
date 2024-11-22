@@ -111,11 +111,17 @@ impl ConnectionSocket {
             let state = slf_state.clone();
             drop(slf_state);
             match state {
+                TcpState::Listening | TcpState::AwaitingRun => panic!("Connection socket should not be in state {state:?}"),
                 TcpState::Initialized => slf.process_syn(tpack),
                 TcpState::SynSent => slf.process_syn_ack(tpack),
                 TcpState::SynRecvd => slf.process_ack(tpack),
                 TcpState::Established => slf.established_handle(tpack),
-                _ => panic!("State not implemented!"),
+                TcpState::FinWait1 => slf.fin_wait_1_handler(tpack),
+                TcpState::FinWait2 => slf.fin_wait_2_handler(tpack),
+                TcpState::TimeWait => slf.time_wait_handler(tpack),
+                TcpState::CloseWait => slf.close_wait_handler(tpack),
+                TcpState::LastAck => slf.last_ack_handler(tpack),
+                TcpState::Closed => slf.closed_handler(tpack),
             }
         };
         let mut state = slf.state.write().unwrap();
@@ -168,158 +174,133 @@ impl ConnectionSocket {
     }
     fn established_handle(&mut self, tpack: TcpPacket) -> TcpState {
         match header_flags(&tpack.header) {
-            ACK if tpack.payload.len() == 0 => {
-                //Received an acknowledgement of data sent
-                {
-                    let mut send_buf = self.write_buf.get_buf();
-                    send_buf.ack_data(tpack.header.acknowledgment_number);
-                }
-                // Retransmission acknowledging
-                {
-                    let mut recv_buf = self.read_buf.get_buf();
-                    let new_ack = recv_buf.add(tpack.header.sequence_number, tpack.payload.clone());
-                    self.ack_num = new_ack;
-                }
-                // Remove ack'd packets from retransmission queue
-                self.ack_rt(tpack.header.acknowledgment_number);
-                self.write_buf.alert_ready();
-            }
-            ACK => {
-                //Received data
-                //Add data to Recv Buffer
-                let mut recv_buf = self.read_buf.get_buf();
-                let new_ack = recv_buf.add(tpack.header.sequence_number, tpack.payload.clone());
-                self.ack_num = new_ack;
-                drop(recv_buf);
-                //Let any waiting receive() thread know that data was just added to the receive buffer
-                self.read_buf.alert_ready();
-                //Send acknowledgement for received data
-                self.send_flags(ACK);
-                println!("Acknowledged received data");
-            }
+            ACK if tpack.payload.len() == 0 => self.ack(tpack),
+            ACK => self.absorb_and_acknowledge(tpack),
             FIN => {
                 //Other dude wants to close the connection
                 // Okay! I will close!
                 self.send_flags(ACK);
                 return TcpState::CloseWait;
             }
-            _ => eprintln!(
-                "I got no clue how to deal with a packet that has flags: {}",
-                header_flags(&tpack.header)
-            ),
+            _ => eprintln!("ESTABLISHED: I got no clue how to deal with a packet that has flags: {}", header_flags(&tpack.header))
         }
         TcpState::Established
     }
-    fn close_wait_handler(&mut self, tpack: TcpPacket) -> TcpState {
-        match header_flags(&tpack.header) {
-            ACK => {
-                return TcpState::Closed;
-            }
-            _ => {
-                eprintln!(
-                    "CLOSE_WAIT: I shouldn't get packet with flags: {}",
-                    header_flags(&tpack.header)
-                );
-            }
-        }
-        return TcpState::CloseWait;
-    }
     fn fin_wait_1_handler(&mut self, tpack: TcpPacket) -> TcpState {
+        //Still accepts both acks for data sent and incoming data
+        //Transitions to FinWait2 upon reception of an ACK for its FIN
         match header_flags(&tpack.header) {
             ACK if tpack.payload.len() == 0 => {
-                //Received an acknowledgement of FIN request
-                return TcpState::FinWait2;
+                if tpack.header.acknowledgment_number == self.seq_num + 1 { //Received packet is ack for FIN we sent
+                    return TcpState::FinWait2;
+                } else { //Received packet is ack for a previous packet we sent
+                    self.ack(tpack)
+                }
             }
-            ACK => {
-                eprintln!(
-                    "FIN_WAIT_1: I shouldn't be getting payloads with ACK flag yet: {}",
-                    header_flags(&tpack.header)
-                );
-            }
-            _ => {
-                eprintln!(
-                    "FIN_WAIT_1: I shouldn't get packet with flags: {}",
-                    header_flags(&tpack.header)
-                );
-            }
+            ACK => self.absorb_and_acknowledge(tpack),
+            _ => eprintln!("FIN_WAIT_1: I shouldn't get packet with flags: {}", header_flags(&tpack.header)),
         }
         TcpState::FinWait1
     }
     fn fin_wait_2_handler(&mut self, tpack: TcpPacket) -> TcpState {
+        //Still accepts both acks for data sent and incoming data
+        //Transitions to TimeWiat upon reception of a FIN 
         match header_flags(&tpack.header) {
-            // TODO: This is jank, fix it!!!
+            ACK if tpack.payload.len() == 0 => self.ack(tpack),
+            ACK => self.absorb_and_acknowledge(tpack),
             FIN => {
-                if tpack.header.ack {
-                    println!("Received final FIN | ACK");
-                    self.send_flags(ACK);
-                    return TcpState::TimeWait;
-                }
-            }
-            ACK => {
-                //Received data
-                //Add data to Recv Buffer
-                let mut recv_buf = self.read_buf.get_buf();
-                let new_ack = recv_buf.add(tpack.header.sequence_number, tpack.payload.clone());
-                self.ack_num = new_ack;
-                drop(recv_buf);
-                //Let any waiting receive() thread know that data was just added to the receive buffer
-                self.read_buf.alert_ready();
-                //Send acknowledgement for received data
+                //Other dude wants to finish this closing business
                 self.send_flags(ACK);
-                println!("Acknowledged received data");
+                return TcpState::TimeWait;
             }
-            _ => {
-                eprintln!(
-                    "FIN_WAIT_2: I shouldn't get packet with flags: {}",
-                    header_flags(&tpack.header)
-                );
-            }
+            _ => eprintln!("FIN_WAIT_2: I shouldn't get packet with flags: {}", header_flags(&tpack.header))
         }
         TcpState::FinWait2
     }
-    fn last_ack_handler(&mut self, tpack: TcpPacket) -> TcpState {
-        match header_flags(&tpack.header) {
-            ACK => {
-                self.closed_sender.send(self.sid).unwrap();
-                return TcpState::Closed;
-            }
-            _ => eprintln!(
-                "LAST ACK: I shouldn't receive anything that's not an ACK at this point!!!"
-            ),
-        }
-        TcpState::LastAck
-    }
     fn time_wait_handler(&mut self, tpack: TcpPacket) -> TcpState {
-        // TODO: ADD CLOSING AFTER 2 * MAX RTO
+        //Still accepts acks for its own data, but doesn't expect any incoming data
+        //Transitions to Closed after 2 * MAX RTO passes
+        //TODO: needs to spawn a thread that will close the connection after 2 * MAX RTO passes - timer should reset every time we receive an ACK
         match header_flags(&tpack.header) {
-            ACK => {
-                //Received data
-                //Add data to Recv Buffer
-                let mut recv_buf = self.read_buf.get_buf();
-                let new_ack = recv_buf.add(tpack.header.sequence_number, tpack.payload.clone());
-                self.ack_num = new_ack;
-                drop(recv_buf);
-                //Let any waiting receive() thread know that data was just added to the receive buffer
-                self.read_buf.alert_ready();
-                //Send acknowledgement for received data
-                self.send_flags(ACK);
-                println!("Acknowledged received data");
-                //Let backend know we've closed officially
-                self.closed_sender.send(self.sid).unwrap();
-                return TcpState::Closed;
-            }
-            _ => {
-                eprintln!("TIME_WAIT: I shouldn't get any packets!");
-            }
+            ACK if tpack.payload.len() == 0 => self.ack(tpack),
+            ACK => eprintln!("TIME_WAIT: I shouldn't get a packet with data from my TCP partner"),
+            _ => eprintln!("TIME_WAIT: I shouldn't get packet with flags: {}", header_flags(&tpack.header)),
         }
         TcpState::TimeWait
     }
-    fn closed_handler(&mut self, _tpack: TcpPacket) -> TcpState {
+    fn close_wait_handler(&mut self, tpack: TcpPacket) -> TcpState {
+        //Still accepts acks for its own data, but doesn't expect any incoming data
+        //Transitions to LastAck only when application runs close(), so no transitioning happening here
+        match header_flags(&tpack.header) {
+            ACK if tpack.payload.len() == 0 => self.ack(tpack),
+            ACK => eprintln!("CLOSE_WAIT: I shouldn't get a packet with data from my TCP partner"),
+            _ => eprintln!("CLOSE_WAIT: I shouldn't get packet with flags: {}", header_flags(&tpack.header)),
+        }
+        TcpState::CloseWait
+    }
+    fn last_ack_handler(&mut self, tpack: TcpPacket) -> TcpState {
+        //Still accepts acks for its own data, but doesn't expect any incoming data
+        //Transitions to Closed when ack for FIN previously sent is received
+        match header_flags(&tpack.header) {
+            ACK if tpack.payload.len() == 0 => {
+                if tpack.header.acknowledgment_number == self.seq_num + 1 {
+                    self.closed_sender.send(self.sid).unwrap();
+                    return TcpState::Closed;
+                } else { self.ack(tpack); }
+            },
+            ACK => eprintln!("LAST_ACK: I shouldn't get a packet with data from my TCP partner"),
+            _ => eprintln!("LAST_ACK: I shouldn't get packet with flags: {}", header_flags(&tpack.header)),
+        }
+        TcpState::LastAck
+    }
+    fn closed_handler(&self, _tpack: TcpPacket) -> TcpState {
+        //Accepts absolutely nothing, should never execute hopefully
         eprintln!("NOOOOOOOOOOOOOO");
         TcpState::Closed
     }
 
-    //UTILITIES
+    //PACKET HANDLING UTILITIES
+    ///Absorbs the packet and sends an acknowledgement for it
+    fn absorb_and_acknowledge(&mut self, tpack: TcpPacket) {
+        //Absorb packet
+        self.absorb_packet(tpack);
+         //Send acknowledgement for received data
+         self.send_flags(ACK);
+         println!("Acknowledged received data");
+
+    }
+    ///Handles adding the data from the packet to the recv buffer, incrementing ack num, and alert any receiving thread that data was added
+    fn absorb_packet(&mut self, tpack: TcpPacket) {
+        let mut recv_buf = self.read_buf.get_buf();
+        let new_ack = recv_buf.add(tpack.header.sequence_number, tpack.payload);
+        self.ack_num = new_ack;
+        self.read_buf.alert_ready();
+    }
+    ///Handles dropping all data associated with sequence numbers less than the ack number of the packet we just received and syncing this with retransmissions
+    fn ack(&self, tpack: TcpPacket) {
+        //Ack data internally within the send buffer
+        let mut send_buf = self.write_buf.get_buf();
+        send_buf.ack_data(tpack.header.acknowledgment_number);
+        // Remove ack'd packets from retransmission queue
+        /*{
+            let mut retr_queue = self.retr_queue.lock().unwrap();
+            // Remove acknowledged packets from queue
+            if let Some(measured_rtt) =
+                retr_queue.calculate_rtt(tpack.header.sequence_number)
+            {
+                let mut retr_timer = self.retr_timer.lock().unwrap();
+                retr_timer.update_rto(measured_rtt);
+                retr_timer.retransmission_count = 0;
+            }
+            println!("Seq: {}", tpack.header.sequence_number);
+            println!("Ack: {}", tpack.header.acknowledgment_number);
+
+            retr_queue.remove_acked_segments(tpack.header.acknowledgment_number);
+        }*/
+    }
+
+    //SETUP FINISHERS
+    ///Sets up socket with knowledge of partner's sequence number
     fn set_init_ack(&mut self, rem_seq_num: u32) {
         //Set ack_num
         self.ack_num = rem_seq_num.clone();
