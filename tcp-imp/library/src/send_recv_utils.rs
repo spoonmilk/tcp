@@ -79,7 +79,7 @@ impl SendBuf {
             .collect::<Vec<u8>>();
 
         self.circ_buffer.extend_from_slice(&to_add[..]);
-        println!("Adding this data: {to_add:?}");
+        // println!("Adding this data: {to_add:?}");
         filler
     }
     ///Returns a vector of data to be put in the next TcpPacket to send, taking into account the input window size of the receiver

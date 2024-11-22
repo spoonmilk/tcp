@@ -326,7 +326,7 @@ impl ConnectionSocket {
         let mut write_buf = self.write_buf.get_buf();
         let retr_queue = &mut write_buf.retr_queue;
         if let Some(measured_rtt) = retr_queue.calculate_rtt(ack_num) {
-            println!("Time until return: {}", measured_rtt.as_millis());
+            // println!("Time until return: {}", measured_rtt.as_millis());
             let mut retr_timer = self.retr_timer.lock().unwrap();
             retr_timer.update_rto(measured_rtt);
             retr_timer.reset();

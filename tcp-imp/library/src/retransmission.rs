@@ -168,7 +168,7 @@ impl RetransmissionQueue {
         timed_out_segments
     }
     pub fn remove_acked_segments(&mut self, ack_num: u32) {
-        println!("Removing segments with seq: {}", ack_num);
+        // println!("Removing segments with seq: {}", ack_num);
         self.queue.retain(|s| s.seq_num >= ack_num);
     }
     pub fn calculate_rtt(&self, ack_num: u32) -> Option<Duration> {
