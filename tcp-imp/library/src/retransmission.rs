@@ -34,6 +34,7 @@ CONSTANTS:
 // CONSTANTS
 const MIN_RTO: u64 = 150; // Milliseconds
 pub const MAX_RTO: u64 = 60000; // Milliseconds
+const MAX_RETRANSMISSIONS: u32 = 3;
 
 #[derive(Debug)]
 pub struct RetransmissionTimer {
@@ -112,6 +113,7 @@ pub struct RetrSegment {
     pub flags: u8,
     time_of_send: Instant,
     pub checksum: u16,
+    pub retransmission_count: u32,
 }
 
 impl RetrSegment {
@@ -123,6 +125,7 @@ impl RetrSegment {
             flags,
             time_of_send: Instant::now(),
             checksum,
+            retransmission_count: 0,
         }
     }
     /// Checks if a retransmission segment has timed out
@@ -159,13 +162,29 @@ impl RetransmissionQueue {
     }
     pub fn get_timed_out_segments(&mut self, current_rto: Duration) -> Vec<RetrSegment> {
         let mut timed_out_segments = Vec::new();
-        for segment in &mut self.queue {
+        // Use retain_mut to iterate and modify the queue
+        self.queue.retain_mut(|segment| {
             if segment.timed_out(current_rto) {
-                // Update the time_of_send for retransmission
-                segment.update_time_of_send();
-                timed_out_segments.push(segment.clone());
+                segment.retransmission_count += 1;
+
+                if segment.retransmission_count >= MAX_RETRANSMISSIONS {
+                    // Drop the segment
+                    println!(
+                        "Dropping segment seq_num={} after {} retransmissions",
+                        segment.seq_num, segment.retransmission_count
+                    );
+                    // Return false to remove the segment from the queue
+                    false
+                } else {
+                    // Update time_of_send for retransmission
+                    segment.update_time_of_send();
+                    timed_out_segments.push(segment.clone());
+                    true // Keep the segment in the queue
+                }
+            } else {
+                true // Keep the segment if not timed out
             }
-        }
+        });
         timed_out_segments
     }
     pub fn remove_acked_segments(&mut self, ack_num: u32) {
