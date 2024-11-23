@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use std::io::ErrorKind;
 
 //TODO:
-//Closing listener sockets doesn't work
+//Closing listener sockets doesn't work - DONE
 //Make receiving a FIN increment the ack number - DONE
 //TimeWait needs to be fully implemented - DONE
 //Handshake timeout
@@ -172,17 +172,20 @@ impl HostRepl {
     }
     pub fn rf_handler(backend: &HostBackend, args: Vec<String>) -> () {
         //Sanitize input
-        let path = if let Ok(path) = Path::new(&args[0]).canonicalize() { path } else { return eprintln!("Path \"{}\" invalid", args[0]) };
+        let path = Path::new(&args[0]);
+        let file = match File::create(path) {
+            Ok(fl) => fl,
+            Err(ref e) if e.kind() == ErrorKind::NotFound => return eprintln!("Invalid input path: {:?}", path),
+            Err(e) => panic!("{e:?}")
+        };
         let port = if let Ok(port) = args[1].parse::<u16>() { port } else { return eprintln!("Input port \"{}\" invalid", args[1]) };
         //Spawn a thread to complete the file reception
         let backend_clone = backend.clone(); //Kinda kludgy, but best I could come up with without major changes
-        thread::spawn(move || Self::receive_file(backend_clone, path, port));
+        thread::spawn(move || Self::receive_file(backend_clone, file, port));
     }
-    fn receive_file(backend: HostBackend, path: PathBuf, port: u16) {
-        let listen_sid = backend.listen(port);
+    fn receive_file(backend: HostBackend, mut file: File, port: u16) {
+        backend.listen(port);
         let sid =  backend.accept1(port).expect("No listener socket with input port found...");
-        backend.close(listen_sid).expect("No listener at the sid we just got back from listen()"); //Close the listener socket
-        let mut file = File::create(path).expect("Unable to open file with path: {path:?}");
         let mut total_bytes_read = 0;
         loop {
             let data = match backend.tcp_recieve(sid, READ_CHUNK as u16) {
@@ -194,6 +197,7 @@ impl HostRepl {
             file.write_all(&data).unwrap();
             total_bytes_read += data.len();
         }
+        println!("We're getting here...");
         backend.close(sid).expect("No socket at the sid we just got back from accept1()...");
         println!("Read {total_bytes_read} bytes");
     }

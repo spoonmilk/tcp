@@ -7,7 +7,7 @@ use crate::conn_socket::ConnectionSocket;
 use crate::tcp_utils::*;
 
 //I'm thinking that initialize() will now return a Backend, so it'll need this
-pub enum  Backend {
+pub enum Backend {
     Host(HostBackend),
     Router(RouterBackend)
 }

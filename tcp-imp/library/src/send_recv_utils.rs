@@ -169,7 +169,8 @@ pub struct RecvBuf {
 impl TcpBuffer for RecvBuf {
     //Ready when buffer has some elements
     fn ready(&self) -> bool {
-        self.circ_buffer.len() != 0
+        let received_fin = if let Some(_) = self.final_seq { true } else { false };
+        self.circ_buffer.len() != 0 || received_fin
     }
 }
 

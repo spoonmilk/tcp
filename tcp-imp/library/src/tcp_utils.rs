@@ -82,6 +82,8 @@ pub const PSH: u8 = 4;
 pub const RST: u8 = 8;
 pub const SYN: u8 = 16;
 pub const FIN: u8 = 32;
+//Stupid Stupid Stupid
+pub const FINACK: u8 = FIN | ACK;
 
 /// Takes a TCP header and returns the flags as a u8
 pub fn header_flags(head: &TcpHeader) -> u8 {

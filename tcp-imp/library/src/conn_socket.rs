@@ -184,11 +184,12 @@ impl ConnectionSocket {
         match header_flags(&tpack.header) {
             ACK if tpack.payload.len() == 0 => self.ack(tpack),
             ACK => self.absorb_and_acknowledge(tpack),
-            FIN => {
+            FINACK => {
                 //Other dude wants to close the connection
                 // Okay! I will close!
                 self.ack_num += 1; 
                 self.read_buf.get_buf().set_final_seq(tpack.header.sequence_number); //Allows receive to know when receiving is no longer allowed
+                self.read_buf.alert_ready(); //Allows any receiving thread to unblock itself and terminate
                 self.send_flags(ACK);
                 return TcpState::CloseWait;
             }
@@ -226,7 +227,7 @@ impl ConnectionSocket {
         match header_flags(&tpack.header) {
             ACK if tpack.payload.len() == 0 => self.ack(tpack),
             ACK => self.absorb_and_acknowledge(tpack),
-            FIN => {
+            FINACK => {
                 //Other dude wants to finish this closing business
                 self.ack_num += 1;
                 self.send_flags(ACK);
@@ -593,8 +594,9 @@ impl ConnectionSocket {
             Arc::clone(&slf.read_buf)
         };
         let mut recv_buf: std::sync::MutexGuard<'_, RecvBuf> = read_buf.wait();
-        let receieved = recv_buf.read(bytes);
-        Ok(receieved)
+        let received = recv_buf.read(bytes);
+        if received.len() == 0 { return Err(Error::new(ErrorKind::Unsupported, "Reception not allow; there's nothing left to receive")) }
+        Ok(received)
     }
     fn receive_allowed(slf: Arc<Mutex<Self>>) -> bool {
         let slf = slf.lock().unwrap();
@@ -629,7 +631,7 @@ impl ConnectionSocket {
                 _ => return eprintln!("Closing not allowed for sockets in state: {:?}", *state)
             }
         };
-        slf.send_flags(FIN); //Send FIN to TCP rpartner and changes state to FinWait1
+        slf.send_flags(FIN | ACK); //Send FIN to TCP rpartner and changes state to FinWait1
         let mut state = slf.state.write().unwrap();
         *state = new_state;
     }
