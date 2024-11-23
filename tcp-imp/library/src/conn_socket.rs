@@ -56,7 +56,7 @@ impl ConnectionSocket {
     pub fn get_sid(slf: Arc<Mutex<Self>>) -> SocketId {
         let slf = slf.lock().unwrap();
         slf.sid
-    } 
+    }
     /// Periodically does checking/elimination/retransmission from the queue and timer
     pub fn time_check(slf: Arc<Mutex<Self>>) {
         let rto = {
@@ -158,8 +158,6 @@ impl ConnectionSocket {
         }
         panic!("Hmm, process_syn was called for a packet that was not SYN - check listener_recv()")
     }
-    //NOTE: For William: Should new_ack do anything here? if not, you can just remove everything
-    //except ack_rt :)
     fn process_syn_ack(&mut self, tpack: TcpPacket) -> TcpState {
         println!("Processing a syn | ack for my ack");
         if has_only_flags(&tpack.header, SYN | ACK) {
@@ -346,15 +344,27 @@ impl ConnectionSocket {
         }
         retr_queue.remove_acked_segments(ack_num);
     }
-
-    // TODO: CLEAN UP HORRIBLE UGLY ADDING TO RETRANSMISSION QUEUE
     //
     //BUILDING AND SENDING PACKETS
     //
     fn send_flags(&mut self, flags: u8) {
         match self.build_and_send(Vec::new(), flags) {
-            Ok(_) => {
-                ();
+            Ok(packet) => {
+                if has_flags(&packet.header, FIN) {
+                    self.add_to_queue(
+                        packet.header.sequence_number,
+                        Vec::new(),
+                        FIN,
+                        packet.header.checksum,
+                    );
+                } else if has_flags(&packet.header, FIN | ACK) {
+                    self.add_to_queue(
+                        packet.header.sequence_number,
+                        Vec::new(),
+                        FIN | ACK,
+                        packet.header.checksum,
+                    );
+                }
             }
             Err(e) => eprintln!("Error sending flags packet to partner: {}", e),
         }
@@ -455,7 +465,6 @@ impl ConnectionSocket {
     //
     //SENDING AND RECVING
     //
-
     // Loops through sending packets of max size 1500 bytes until everything's been sent
     pub fn send(slf: Arc<Mutex<Self>>, mut to_send: Vec<u8>) -> u16 {
         // Condvar for checking if the buffer has been updated
