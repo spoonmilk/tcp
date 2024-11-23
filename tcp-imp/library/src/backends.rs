@@ -68,8 +68,8 @@ impl HostBackend {
             Some(sid)
         } else { None }
     }
-    pub fn connect(&self, ip_addr: Ipv4Addr, port: u16) -> () { self.init_new_conn(ip_addr, port); }
-    fn init_new_conn(&self, dst_vip: Ipv4Addr, dst_port: u16) -> () {
+    pub fn connect(&self, ip_addr: Ipv4Addr, port: u16) -> SocketId { self.init_new_conn(ip_addr, port) }
+    fn init_new_conn(&self, dst_vip: Ipv4Addr, dst_port: u16) -> SocketId {
         let conn_src_addr = self.unused_tcp_addr();
         let conn_dst_addr = TcpAddress::new(dst_vip, dst_port);
         let init_state = Arc::new(RwLock::new(TcpState::AwaitingRun));
@@ -80,6 +80,7 @@ impl HostBackend {
         let sid = self.sid_assigner.assign_sid();
         let sock = pending_conn.start(&mut socket_table, sid); 
         ConnectionSocket::first_syn(sock); //Sends SYN message to start handshaked
+        sid
     }
     /// Generates a new unused TCP address on the local IP
     fn unused_tcp_addr(&self) -> TcpAddress {
@@ -112,16 +113,14 @@ impl HostBackend {
             Some(sock) => sock,
             None => return Err(Error::new(ErrorKind::InvalidInput, "Input socket ID does not match that of any connection sockets"))
         };
-        let bytes_sent = ConnectionSocket::send(sock, data);
-        Ok(bytes_sent)
+        ConnectionSocket::send(sock, data)
     }
     pub fn tcp_recieve(&self, sid: SocketId, bytes: u16) -> Result<Vec<u8>> {
         let sock = match self.sock_arc(&sid) {
             Some(sock) => sock,
             None => return Err(Error::new(ErrorKind::InvalidInput, "Input socket ID does not match that of any connection sockets"))
         };
-        let data = ConnectionSocket::receive(sock, bytes);
-        Ok(data)
+        ConnectionSocket::receive(sock, bytes)
     }
     pub fn close(&self, sid: SocketId) -> Result<()> {
         match self.socket_table().get(&sid) {

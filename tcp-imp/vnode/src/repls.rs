@@ -13,14 +13,15 @@ use std::sync::Arc;
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::io::ErrorKind;
 
 //TODO:
-//Make send and receive error when called on closed sockets
+//Make send and receive error when called on closed sockets - DONE
 //Change internal sid assignment to not be based on table length - DONE
 //Change send file to spawn a thread - DONE
 //Make both send file and receive file print bytes sent and received - DONE
-//Retransmitting closing related packets
-//Finish TimeWait
+//Retransmitting closing related packets - DONE
+//Finish TimeWait - DONE
 //Test retransmissions and ZWP together and with closing (test send/receive file)
 //Run performance test
 
@@ -154,25 +155,19 @@ impl HostRepl {
         // 1 kb buffer for reading into send
         let mut buf: Vec<u8> = vec![0u8; READ_CHUNK];
         // Call connect and establish a connection on the inputted ip and port
-        backend.connect(ip_addr, port);
-        let sock_table = backend.socket_table();
-        let sid = match HostBackend::find_conn_socket(sock_table, &ip_addr, &port) {
-           None => return eprintln!("Unable to find connection socket"),
-           Some(sid) => sid 
-        };
+        let sid = backend.connect(ip_addr, port);
         //Let the sending begin!
         let mut total_bytes_sent = 0; 
         loop {
             let bytes_read = file.read(&mut buf).unwrap();
-            if bytes_read == 0 {
-                break;
-            } 
+            if bytes_read == 0 { break; } //We have reached EOF
             match backend.tcp_send(sid, buf[..bytes_read].to_vec()) {
                 Ok(_) => (),
-                Err(e) => println!("{}", e.to_string())
+                Err(e) => panic!("{}", e.to_string())
             };
             total_bytes_sent += bytes_read;
         }
+        backend.close(sid).expect("Somehow connection socket already got removed from socket table...");
         println!("Sent {total_bytes_sent} bytes");
 
     }
@@ -191,8 +186,12 @@ impl HostRepl {
         let mut file = File::create(path).expect("Unable to open file with path: {path:?}");
         let mut total_bytes_read = 0;
         loop {
-            let data = backend.tcp_recieve(sid, READ_CHUNK as u16).expect("No socket at the sid we just got back from accept1()...");
-            if data.len() == 0 { break; } //Should only happen if connection is closing
+            let data = match backend.tcp_recieve(sid, READ_CHUNK as u16) {
+                Ok(data) => data,
+                Err(ref e) if e.kind() == ErrorKind::InvalidInput => panic!("Socket at sid we were given by accept1() doesn't exist..."),
+                Err(ref e) if e.kind() == ErrorKind::Unsupported => break, //We can't receive anymore - this is expected behavior for when there is nothing left to receive
+                Err(e) => panic!("Received error: {e:?}")
+            };
             file.write_all(&data).unwrap();
             total_bytes_read += data.len();
         }
