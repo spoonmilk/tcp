@@ -20,13 +20,13 @@ impl SidAssigner {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum SocketEntry {
     Connection(ConnectionEntry),
     Listener(ListenEntry),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ConnectionEntry {
     pub src_addr: TcpAddress,
     pub dst_addr: TcpAddress,
@@ -35,7 +35,7 @@ pub struct ConnectionEntry {
     pub sock: Arc<Mutex<ConnectionSocket>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ListenEntry {
     pub port: u16,
     pub state: Arc<RwLock<TcpState>>,

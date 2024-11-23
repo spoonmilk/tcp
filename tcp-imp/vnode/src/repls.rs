@@ -18,9 +18,9 @@ use std::io::ErrorKind;
 //TODO:
 //Closing listener sockets doesn't work
 //Make receiving a FIN increment the ack number - DONE
-//TimeWait needs to be fully implemented 
+//TimeWait needs to be fully implemented - DONE
 //Handshake timeout
-//Have close functionality vary based on current state
+//Have close functionality vary based on current state - DONE
 //Test retransmissions and ZWP together and with closing (test send/receive file)
 //Run performance test
 

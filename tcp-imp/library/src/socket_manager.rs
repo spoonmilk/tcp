@@ -115,21 +115,8 @@ impl SocketManager {
             false => listener.pending_connections.push(pending_conn)
         }
     }
-    pub fn listener_close(&mut self, listen_ent: &ListenEntry) -> () {
+    pub fn listener_close(&mut self, listen_ent: ListenEntry) -> () {
         let listen_port = listen_ent.port;
-
-        let mut sock_table = self.socket_table.write().unwrap();
-        match sock_table.get(&listen_port) {
-            Some(entry) => {
-                match entry {
-                    SocketEntry::Listener(_) => {
-                        sock_table.remove(&listen_port);
-                    }
-                    _ => {}
-                }
-            },
-            None => {}
-        }
         self.listener_table.remove(&listen_port); 
     }
 }
