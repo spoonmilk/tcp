@@ -16,12 +16,11 @@ use std::path::{Path, PathBuf};
 use std::io::ErrorKind;
 
 //TODO:
-//Make send and receive error when called on closed sockets - DONE
-//Change internal sid assignment to not be based on table length - DONE
-//Change send file to spawn a thread - DONE
-//Make both send file and receive file print bytes sent and received - DONE
-//Retransmitting closing related packets - DONE
-//Finish TimeWait - DONE
+//Closing listener sockets doesn't work
+//Make receiving a FIN increment the ack number - DONE
+//TimeWait needs to be fully implemented 
+//Handshake timeout
+//Have close functionality vary based on current state
 //Test retransmissions and ZWP together and with closing (test send/receive file)
 //Run performance test
 

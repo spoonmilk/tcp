@@ -98,7 +98,7 @@ impl ConnectionSocket {
     //
     //TODO: Clean this ugly ass function up
     pub fn handle_packet(slf: Arc<Mutex<Self>>, tpack: TcpPacket, ip_head: Ipv4Header) {
-        //let slf_clone = Arc::clone(&slf); //Needed for zero window probing
+        let slf_clone = Arc::clone(&slf); //Needed for closing in fin_wait_2_handler
         let mut slf = slf.lock().unwrap();
         //Universal packet reception actions
         if has_flags(&tpack.header, RST) {
@@ -128,7 +128,7 @@ impl ConnectionSocket {
                 TcpState::SynRecvd => slf.process_ack(tpack),
                 TcpState::Established => slf.established_handle(tpack),
                 TcpState::FinWait1 => slf.fin_wait_1_handler(tpack),
-                TcpState::FinWait2 => slf.fin_wait_2_handler(tpack),
+                TcpState::FinWait2 => slf.fin_wait_2_handler(tpack, slf_clone),
                 TcpState::TimeWait => slf.time_wait_handler(tpack),
                 TcpState::CloseWait => slf.close_wait_handler(tpack),
                 TcpState::LastAck => slf.last_ack_handler(tpack),
@@ -187,8 +187,9 @@ impl ConnectionSocket {
             FIN => {
                 //Other dude wants to close the connection
                 // Okay! I will close!
-                self.send_flags(ACK);
+                self.ack_num += 1; 
                 self.read_buf.get_buf().set_final_seq(tpack.header.sequence_number); //Allows receive to know when receiving is no longer allowed
+                self.send_flags(ACK);
                 return TcpState::CloseWait;
             }
             _ => eprintln!(
@@ -203,7 +204,7 @@ impl ConnectionSocket {
         //Transitions to FinWait2 upon reception of an ACK for its FIN
         match header_flags(&tpack.header) {
             ACK if tpack.payload.len() == 0 => {
-                if tpack.header.acknowledgment_number == self.seq_num + 1 {
+                if tpack.header.acknowledgment_number == self.seq_num {
                     //Received packet is ack for FIN we sent
                     return TcpState::FinWait2;
                 } else {
@@ -219,7 +220,7 @@ impl ConnectionSocket {
         }
         TcpState::FinWait1
     }
-    fn fin_wait_2_handler(&mut self, tpack: TcpPacket) -> TcpState {
+    fn fin_wait_2_handler(&mut self, tpack: TcpPacket, slf_clone: Arc<Mutex<Self>>) -> TcpState {
         //Still accepts both acks for data sent and incoming data
         //Transitions to TimeWiat upon reception of a FIN
         match header_flags(&tpack.header) {
@@ -227,7 +228,9 @@ impl ConnectionSocket {
             ACK => self.absorb_and_acknowledge(tpack),
             FIN => {
                 //Other dude wants to finish this closing business
+                self.ack_num += 1;
                 self.send_flags(ACK);
+                thread::spawn(move || Self::wait_then_close(slf_clone));
                 return TcpState::TimeWait;
             }
             _ => eprintln!(
@@ -239,8 +242,7 @@ impl ConnectionSocket {
     }
     fn time_wait_handler(&mut self, tpack: TcpPacket) -> TcpState {
         //Still accepts acks for its own data, but doesn't expect any incoming data
-        //Transitions to Closed after 2 * MAX RTO passes
-        //TODO: needs to spawn a thread that will close the connection after 2 * MAX RTO passes - timer should reset every time we receive an ACK
+        //Transitions to Closed after 2 * MAX RTO passes - timer started in fin_wait_2_handler
         match header_flags(&tpack.header) {
             ACK if tpack.payload.len() == 0 => self.ack(tpack),
             ACK => eprintln!("TIME_WAIT: I shouldn't get a packet with data from my TCP partner"),
@@ -269,7 +271,7 @@ impl ConnectionSocket {
         //Transitions to Closed when ack for FIN previously sent is received
         match header_flags(&tpack.header) {
             ACK if tpack.payload.len() == 0 => {
-                if tpack.header.acknowledgment_number == self.seq_num + 1 {
+                if tpack.header.acknowledgment_number == self.seq_num {
                     self.enter_closed();
                     return TcpState::Closed;
                 } else {
@@ -318,6 +320,13 @@ impl ConnectionSocket {
     }
     fn enter_closed(&self) {
         self.closed_sender.send(self.sid).unwrap();
+    }
+    fn wait_then_close(slf: Arc<Mutex<Self>>) {
+        thread::sleep(Duration::from_millis(2 * MAX_RTO));
+        let slf = slf.lock().unwrap();
+        slf.closed_sender.send(slf.sid).expect("Error sending to closing thread");
+        let mut state = slf.state.write().unwrap();
+        *state = TcpState::Closed;
     }
 
     //SETUP FINISHERS
@@ -578,7 +587,7 @@ impl ConnectionSocket {
         proper_state
     }
     pub fn receive(slf: Arc<Mutex<Self>>, bytes: u16) -> Result<Vec<u8>> {
-        if !Self::receive_allowed(Arc::clone(&slf)) { return Err(Error::new(ErrorKind::Unsupported, "Nothing left to receive")) }
+        if !Self::receive_allowed(Arc::clone(&slf)) { return Err(Error::new(ErrorKind::Unsupported, "Reception not allow; there's nothing left to receive")) }
         let read_buf = {
             let slf = slf.lock().unwrap();
             Arc::clone(&slf.read_buf)
@@ -612,20 +621,16 @@ impl ConnectionSocket {
     ///Initializes closing procedure
     pub fn close(slf: Arc<Mutex<Self>>) {
         let mut slf = slf.lock().unwrap();
-        //Send FIN to TCP rpartner and changes state to FinWait1
-        slf.send_flags(FIN);
+        let new_state = {
+            let state = slf.state.read().unwrap();
+            match *state {
+                TcpState::Established => TcpState::FinWait1,
+                TcpState::CloseWait => TcpState::LastAck,
+                _ => return eprintln!("Closing not allowed for sockets in state: {:?}", *state)
+            }
+        };
+        slf.send_flags(FIN); //Send FIN to TCP rpartner and changes state to FinWait1
         let mut state = slf.state.write().unwrap();
-        *state = TcpState::FinWait1;
-    }
-    fn check_established(&self) -> bool {
-        if let TcpState::Established = *self.state.read().unwrap() { true } else { false }
+        *state = new_state;
     }
 }
-
-/*
-enum SendState {
-    Sending,
-    Probing,
-    Waiting,
-}
-*/

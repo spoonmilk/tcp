@@ -122,13 +122,15 @@ impl SendBuf {
     ///Acknowledges (drops) all sent bytes up to the one indicated by most_recent_ack
     pub fn ack_data(&mut self, most_recent_ack: u32) {
         // Caclulate relative acknowledged data
-        let relative_ack = most_recent_ack - (self.num_acked + self.our_init_seq + 1);
+        let mut relative_ack = most_recent_ack - (self.num_acked + self.our_init_seq + 1);
         //Check for and handle transition from probing
-        if self.probing && relative_ack > self.nxt as u32 {
+        if self.probing && relative_ack > self.nxt as u32 { //Probe packet received
             self.probing = false;
             self.nxt += 1;
             self.stop_probing_sender.send(()).unwrap();
             println!("Stop probing CHANNEL signal sent");
+        } else if relative_ack as usize == self.nxt + 1 { //Our FIN is being acked - kinda kludgy
+            relative_ack -= 1
         }
         // Decrement nxt pointer to match dropped data ; compensation for absence of una
         self.nxt -= relative_ack as usize;
@@ -215,17 +217,6 @@ impl RecvBuf {
             } //Early arrival, add it to early arrival hashmap
         }
         self.expected_seq()
-        /* Old way of doing things
-        if seq_num == self.expected_seq() {
-            self.circ_buffer.extend_from_slice(&data[..]);
-            while let Some(next_data) = self.early_arrivals.remove(&self.expected_seq()) {
-                self.circ_buffer.extend_from_slice(&next_data[..]);
-            }
-        } else {
-            self.early_arrivals.insert(seq_num, data);
-        }
-        self.expected_seq()
-        */
     }
     ///Returns the next expected sequence number - only used privately, self.add() returns next sequence number too for public use
     fn expected_seq(&self) -> u32 {
@@ -238,7 +229,7 @@ impl RecvBuf {
     ///Returns a boolean representing whether or not there is data the buffer still expects to receive
     pub fn can_receive(&self) -> bool {
         match self.final_seq {
-            Some(fin_seq_num) => self.expected_seq() < fin_seq_num,
+            Some(fin_seq_num) => self.expected_seq() < fin_seq_num || self.circ_buffer.len() != 0, //Can receive if there are still packets out there OR if we still have stuff in our buffer
             None => true
         }
     }
