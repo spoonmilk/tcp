@@ -186,7 +186,7 @@ impl ConnectionSocket {
                 //Other dude wants to close the connection
                 // Okay! I will close!
                 self.send_flags(ACK);
-                self.read_buf.alert_ready(); //Tells any running receive thread that we can't receive anymore
+                self.read_buf.get_buf().set_final_seq(tpack.header.sequence_number); //Allows receive to know when receiving is no longer allowed
                 return TcpState::CloseWait;
             }
             _ => eprintln!(
@@ -466,7 +466,8 @@ impl ConnectionSocket {
     //SENDING AND RECVING
     //
     // Loops through sending packets of max size 1500 bytes until everything's been sent
-    pub fn send(slf: Arc<Mutex<Self>>, mut to_send: Vec<u8>) -> u16 {
+    pub fn send(slf: Arc<Mutex<Self>>, mut to_send: Vec<u8>) -> Result<u16> {
+        if !Self::send_allowed(Arc::clone(&slf)) { return Err(Error::new(ErrorKind::Unsupported, "Send not allowed - already closed socket on this side")) }
         // Condvar for checking if the buffer has been updated
         let buf_update = Arc::new(Condvar::new());
         let thread_buf_update = Arc::clone(&buf_update);
@@ -501,7 +502,7 @@ impl ConnectionSocket {
         thread_send_onwards
             .join()
             .expect("Send onwards thread panicked");
-        bytes_sent as u16
+        Ok(bytes_sent as u16)
     }
 
     fn send_onwards(
@@ -577,13 +578,32 @@ impl ConnectionSocket {
             drop(slf);
         }
     }
-    pub fn receive(slf: Arc<Mutex<Self>>, bytes: u16) -> Vec<u8> {
+    fn send_allowed(slf: Arc<Mutex<Self>>) -> bool {
+        let slf = slf.lock().unwrap();
+        let proper_state = match *slf.state.read().unwrap() {
+            TcpState::FinWait1 | TcpState::FinWait2 | TcpState::TimeWait | TcpState::LastAck | TcpState::Closed => false,
+            _ => true
+        };
+        proper_state
+    }
+    pub fn receive(slf: Arc<Mutex<Self>>, bytes: u16) -> Result<Vec<u8>> {
+        if !Self::receive_allowed(Arc::clone(&slf)) { return Err(Error::new(ErrorKind::Unsupported, "Nothing left to receive")) }
         let read_buf = {
             let slf = slf.lock().unwrap();
             Arc::clone(&slf.read_buf)
         };
         let mut recv_buf: std::sync::MutexGuard<'_, RecvBuf> = read_buf.wait();
-        recv_buf.read(bytes)
+        let receieved = recv_buf.read(bytes);
+        Ok(receieved)
+    }
+    fn receive_allowed(slf: Arc<Mutex<Self>>) -> bool {
+        let slf = slf.lock().unwrap();
+        let proper_state = match *slf.state.read().unwrap() { //Proper state is any state where close() hasn't already been called on us
+            TcpState::FinWait1 | TcpState::FinWait2 | TcpState::TimeWait | TcpState::LastAck | TcpState::Closed => false,
+            _ => true
+        };
+        let data_out_there = slf.read_buf.get_buf().can_receive();
+        proper_state && data_out_there
     }
     fn send_segment(&mut self, seq_num: u32, payload: Vec<u8>, flags: u8, checksum: u16) {
         let my_payload = String::from_utf8(payload.clone()).unwrap();
@@ -605,6 +625,9 @@ impl ConnectionSocket {
         slf.send_flags(FIN);
         let mut state = slf.state.write().unwrap();
         *state = TcpState::FinWait1;
+    }
+    fn check_established(&self) -> bool {
+        if let TcpState::Established = *self.state.read().unwrap() { true } else { false }
     }
 }
 

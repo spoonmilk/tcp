@@ -161,6 +161,7 @@ pub struct RecvBuf {
     early_arrivals: PayloadMap,
     bytes_read: u32,
     rem_init_seq: u32,
+    final_seq: Option<u32>
 }
 
 impl TcpBuffer for RecvBuf {
@@ -177,6 +178,7 @@ impl RecvBuf {
             early_arrivals: PayloadMap::new(),
             bytes_read: 0,
             rem_init_seq: 0, //We don't know yet *shrug* - gets set once and then is never edited
+            final_seq: None
         }
     }
 
@@ -233,9 +235,19 @@ impl RecvBuf {
     pub fn window(&self) -> u16 {
         (self.circ_buffer.capacity() - self.circ_buffer.len() - self.early_arrivals.len()) as u16
     }
+    ///Returns a boolean representing whether or not there is data the buffer still expects to receive
+    pub fn can_receive(&self) -> bool {
+        match self.final_seq {
+            Some(fin_seq_num) => self.expected_seq() < fin_seq_num,
+            None => true
+        }
+    }
 
     pub fn set_init_seq(&mut self, seq_num: u32) {
         self.rem_init_seq = seq_num;
+    }
+    pub fn set_final_seq(&mut self, fin_seq_num: u32) {
+        self.final_seq = Some(fin_seq_num);
     }
 }
 
