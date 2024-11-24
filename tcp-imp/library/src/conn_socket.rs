@@ -59,16 +59,18 @@ impl ConnectionSocket {
     } 
     /// Periodically does checking/elimination/retransmission from the queue and timer
     pub fn time_check(slf: Arc<Mutex<Self>>) {
-        let rto = {
-            let slf = slf.lock().unwrap();
-            let retr_timer = slf.retr_timer.lock().unwrap();
-            retr_timer.rto
-        };
         loop {
-            thread::sleep(rto);
+            // Get current RTO for this iteration
+            let current_rto = {
+                let slf = slf.lock().unwrap();
+                let retr_timer = slf.retr_timer.lock().unwrap();
+                retr_timer.rto
+            };
+            
+            thread::sleep(current_rto);
+            
             {
                 let mut slf = slf.lock().unwrap();
-                let current_rto = slf.retr_timer.lock().unwrap().rto;
                 let retr_segs = {
                     let write_buf = Arc::clone(&slf.write_buf);
                     let mut writer = write_buf.get_buf();
