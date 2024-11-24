@@ -121,22 +121,45 @@ impl SendBuf {
     }
     ///Acknowledges (drops) all sent bytes up to the one indicated by most_recent_ack
     pub fn ack_data(&mut self, most_recent_ack: u32) {
-        // Caclulate relative acknowledged data
-        let mut relative_ack = most_recent_ack - (self.num_acked + self.our_init_seq + 1);
-        //Check for and handle transition from probing
-        if self.probing && relative_ack > self.nxt as u32 { //Probe packet received
+        // Calculate relative acknowledged data using checked arithmetic
+        let base = self.num_acked.checked_add(self.our_init_seq)
+            .and_then(|sum| sum.checked_add(1))
+            .expect("Sequence number overflow");
+            
+        // Use wrapping subtraction to handle sequence number wraparound
+        let relative_ack = most_recent_ack.wrapping_sub(base);
+        
+        // Handle probing state transition - do this first regardless of ack size
+        if self.probing && relative_ack > self.nxt as u32 {
+            // Probe packet received
             self.probing = false;
             self.nxt += 1;
             self.stop_probing_sender.send(()).unwrap();
             println!("Stop probing CHANNEL signal sent");
-        } else if relative_ack as usize == self.nxt + 1 { //Our FIN is being acked - kinda kludgy
-            relative_ack -= 1
+            return; // We're done handling the probe ack
         }
-        // Decrement nxt pointer to match dropped data ; compensation for absence of una
-        self.nxt -= relative_ack as usize;
-        // Drain out acknowledged data
-        self.circ_buffer.drain(..relative_ack as usize);
-        self.num_acked += relative_ack;
+        
+        // For non-probe packets, validate that relative_ack is reasonable
+        if relative_ack > BUFFER_CAPACITY as u32 {
+            // If the relative ack is larger than our buffer capacity,
+            // something has gone wrong - likely a wraparound or invalid ack
+            println!("Warning: Received unexpectedly large relative ack: {}", relative_ack);
+            return;
+        }
+
+        // Handle normal cases and FIN acks
+        if relative_ack as usize == self.nxt + 1 {
+            // Handle FIN ack case
+            let relative_ack = relative_ack - 1;
+            self.nxt = self.nxt.saturating_sub(relative_ack as usize);
+            self.circ_buffer.drain(..relative_ack as usize);
+            self.num_acked = self.num_acked.saturating_add(relative_ack);
+        } else {
+            // Normal case
+            self.nxt = self.nxt.saturating_sub(relative_ack as usize);
+            self.circ_buffer.drain(..relative_ack as usize);
+            self.num_acked = self.num_acked.saturating_add(relative_ack);
+        }
     }
     ///Updates the SendBuf's internal tracker of how many more bytes can be sent before filling the reciever's window
     pub fn update_window(&mut self, new_window: u16) {

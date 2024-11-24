@@ -6,7 +6,6 @@ use crate::socket_manager::SocketManager;
 use crate::conn_socket::ConnectionSocket;
 use crate::tcp_utils::*;
 
-//I'm thinking that initialize() will now return a Backend, so it'll need this
 pub enum Backend {
     Host(HostBackend),
     Router(RouterBackend)
@@ -68,19 +67,55 @@ impl HostBackend {
             Some(sid)
         } else { None }
     }
-    pub fn connect(&self, ip_addr: Ipv4Addr, port: u16) -> SocketId { self.init_new_conn(ip_addr, port) }
-    fn init_new_conn(&self, dst_vip: Ipv4Addr, dst_port: u16) -> SocketId {
+    pub fn connect(&self, ip_addr: Ipv4Addr, port: u16) -> SocketId {
+        // Initialize connection
+        let (sid, sock) = self.init_new_conn(ip_addr, port);
+        
+        // Create completion channel
+        let (tx, rx) = channel();
+        
+        // Spawn monitoring thread
+        let sock_clone = Arc::clone(&sock);
+        thread::spawn(move || {
+            loop {
+                let state = {
+                    let socket = sock_clone.lock().unwrap();
+                    let state = socket.state.read().unwrap();
+                    (*state).clone()
+                };
+                
+                match state {
+                    TcpState::Established => {
+                        tx.send(()).unwrap();
+                        break;
+                    }
+                    TcpState::Closed => {
+                        panic!("Connection failed - socket closed during handshake");
+                    }
+                    _ => {
+                        thread::sleep(Duration::from_millis(10));
+                        continue;
+                    }
+                }
+            }
+        });
+
+        // Wait for completion
+        rx.recv().expect("Connection monitor thread died");
+        
+        sid
+    }
+    fn init_new_conn(&self, dst_vip: Ipv4Addr, dst_port: u16) -> (SocketId, Arc<Mutex<ConnectionSocket>>) {
         let conn_src_addr = self.unused_tcp_addr();
         let conn_dst_addr = TcpAddress::new(dst_vip, dst_port);
         let init_state = Arc::new(RwLock::new(TcpState::AwaitingRun));
-        // TODO: REfactor after connectionsocket refactoring
         let conn_sock = ConnectionSocket::new(init_state, conn_src_addr.clone(), conn_dst_addr.clone(), Arc::clone(&self.closed_sender), Arc::clone(&self.ip_sender));
         let pending_conn = PendingConn::new(conn_sock);
         let mut socket_table = self.socket_table_mut();
         let sid = self.sid_assigner.assign_sid();
         let sock = pending_conn.start(&mut socket_table, sid); 
-        ConnectionSocket::first_syn(sock); //Sends SYN message to start handshaked
-        sid
+        ConnectionSocket::first_syn(sock.clone()); //Sends SYN message to start handshake
+        (sid, sock)
     }
     /// Generates a new unused TCP address on the local IP
     fn unused_tcp_addr(&self) -> TcpAddress {
