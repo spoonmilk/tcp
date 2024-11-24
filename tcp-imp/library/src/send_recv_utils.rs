@@ -198,45 +198,32 @@ impl RecvBuf {
         let greatest_constraint = constraints.iter().min().unwrap();
         let data: Vec<u8> = self.circ_buffer.drain(..greatest_constraint).collect();
         self.bytes_read += data.len() as u32;
-        
-        println!("Read {} bytes, total bytes_read: {}, buffer_len: {}, can_receive: {}", 
-            data.len(), self.bytes_read, self.circ_buffer.len(), self.can_receive());
-        
-        if let Some(final_seq) = self.final_seq {
-            println!("Final seq: {}, expected seq: {}", final_seq, self.expected_seq());
-        }
-        
         data
     }
 
+    ///Adds the input data segment to the buffer if its sequence number is the next expected one. If not, inserts the segment into the
+    ///early arrival hashmap. If data is ever added to the buffer, the early arrivals hashmap is checked to see if it contains the
+    ///following expected segment, and the cycle continues until there are no more segments to add to the buffer
+    ///Returns the next expected sequence number (the new ack number)
     pub fn add(&mut self, seq_num: u32, data: Vec<u8>) -> u32 {
-        println!("Adding data with seq: {}, len: {}, expected seq: {}", 
-            seq_num, data.len(), self.expected_seq());
-        
+        //println!("sequence number: {}\nexpected sequence number: {}", seq_num, self.expected_seq());
         match seq_num.cmp(&self.expected_seq()) {
             cmp::Ordering::Equal => {
-                println!("In-order data received");
                 let data_slice = match data.len() > self.window() as usize {
                     true => &data[..self.window() as usize],
                     false => &data[..],
                 };
                 self.circ_buffer.extend_from_slice(data_slice);
                 if let Some(next_data) = self.early_arrivals.remove(&self.expected_seq()) {
-                    println!("Found early arrival to process");
                     return self.add(self.expected_seq(), next_data);
                 }
             }
-            cmp::Ordering::Less => println!("Received old data"),
+            cmp::Ordering::Less => {} //Drop packet, contains stale data
             cmp::Ordering::Greater => {
-                println!("Early arrival, adding to map");
                 self.early_arrivals.insert(seq_num, data);
-            }
+            } //Early arrival, add it to early arrival hashmap
         }
-        
-        let exp_seq = self.expected_seq();
-        println!("New expected seq: {}, early arrivals: {}", 
-            exp_seq, self.early_arrivals.len());
-        exp_seq
+        self.expected_seq()
     }
     ///Returns the next expected sequence number - only used privately, self.add() returns next sequence number too for public use
     fn expected_seq(&self) -> u32 {
