@@ -153,6 +153,9 @@ impl SendBuf {
             { self.retr_queue.get_timed_out_segments(current_rto) };
         timed_out_segments
     }
+    pub fn still_sending(&self) -> bool {
+        self.circ_buffer.len() == 0 && self.nxt == 0 && !self.probing && self.retr_queue.is_empty()
+    }
 }
 
 pub enum NextData {
@@ -220,7 +223,8 @@ impl RecvBuf {
             }
             cmp::Ordering::Less => {} //Drop packet, contains stale data
             cmp::Ordering::Greater => {
-                self.early_arrivals.insert(seq_num, data);
+                if data.len() <= self.window() as usize { self.early_arrivals.insert(seq_num, data) }
+                else {} //Drop packet, we don't have space
             } //Early arrival, add it to early arrival hashmap
         }
         self.expected_seq()
