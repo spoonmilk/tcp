@@ -201,45 +201,76 @@ impl ConnectionSocket {
         TcpState::Established
     }
     fn fin_wait_1_handler(&mut self, tpack: TcpPacket) -> TcpState {
-        //Still accepts both acks for data sent and incoming data
-        //Transitions to FinWait2 upon reception of an ACK for its FIN
+        // Still accepts both acks for data sent and incoming data
+        // Transitions to FinWait2 upon reception of an ACK for its FIN
         match header_flags(&tpack.header) {
             ACK if tpack.payload.len() == 0 => {
+                // First, handle the acknowledgment 
+                self.ack(tpack.clone());
+                
+                // Check if this was an ack for our FIN
                 if tpack.header.acknowledgment_number == self.seq_num {
-                    //Received packet is ack for FIN we sent
                     return TcpState::FinWait2;
-                } else {
-                    //Received packet is ack for a previous packet we sent
-                    self.ack(tpack)
                 }
+                TcpState::FinWait1
             }
-            ACK => self.absorb_and_acknowledge(tpack),
-            _ => eprintln!(
-                "FIN_WAIT_1: I shouldn't get packet with flags: {}",
-                header_flags(&tpack.header)
-            ),
-        }
-        TcpState::FinWait1
-    }
-    fn fin_wait_2_handler(&mut self, tpack: TcpPacket, slf_clone: Arc<Mutex<Self>>) -> TcpState {
-        //Still accepts both acks for data sent and incoming data
-        //Transitions to TimeWiat upon reception of a FIN
-        match header_flags(&tpack.header) {
-            ACK if tpack.payload.len() == 0 => self.ack(tpack),
-            ACK => self.absorb_and_acknowledge(tpack),
+            ACK => {
+                // Handle incoming data with acknowledgment
+                self.absorb_and_acknowledge(tpack);
+                TcpState::FinWait1
+            }
             FINACK => {
-                //Other dude wants to finish this closing business
+                // Handle simultaneous close case - acknowledge their FIN
                 self.ack_num += 1;
                 self.send_flags(ACK);
-                thread::spawn(move || Self::wait_then_close(slf_clone));
-                return TcpState::TimeWait;
+                if tpack.header.acknowledgment_number == self.seq_num {
+                    return TcpState::TimeWait;
+                }
+                TcpState::FinWait1
             }
-            _ => eprintln!(
-                "FIN_WAIT_2: I shouldn't get packet with flags: {}",
-                header_flags(&tpack.header)
-            ),
+            _ => {
+                eprintln!(
+                    "FIN_WAIT_1: Unexpected packet with flags: {}",
+                    header_flags(&tpack.header)
+                );
+                TcpState::FinWait1
+            }
         }
-        TcpState::FinWait2
+    }
+    fn fin_wait_2_handler(&mut self, tpack: TcpPacket, slf_clone: Arc<Mutex<Self>>) -> TcpState {
+        match header_flags(&tpack.header) {
+            ACK if tpack.payload.len() == 0 => {
+                // Handle pure ACKs
+                self.ack(tpack);
+                TcpState::FinWait2
+            }
+            ACK => {
+                // Handle incoming data with ACK
+                self.absorb_and_acknowledge(tpack);
+                TcpState::FinWait2
+            }
+            FINACK => {
+                // First absorb any final data that came with the FIN
+                if !tpack.payload.is_empty() {
+                    self.absorb_packet(tpack.clone());
+                }
+                
+                // Then handle the FIN
+                self.ack_num += 1;
+                self.send_flags(ACK);
+                
+                // Start the TIME_WAIT timer
+                thread::spawn(move || Self::wait_then_close(slf_clone));
+                TcpState::TimeWait
+            }
+            _ => {
+                eprintln!(
+                    "FIN_WAIT_2: Unexpected packet with flags: {}",
+                    header_flags(&tpack.header)
+                );
+                TcpState::FinWait2
+            }
+        }
     }
     fn time_wait_handler(&mut self, tpack: TcpPacket) -> TcpState {
         //Still accepts acks for its own data, but doesn't expect any incoming data
@@ -299,8 +330,7 @@ impl ConnectionSocket {
         //Absorb packet
         self.absorb_packet(tpack);
         //Send acknowledgement for received data
-        self.send_flags(ACK);
-        println!("Acknowledged received data");
+        self.send_flags(ACK); 
     }
     ///Handles adding the data from the packet to the recv buffer, incrementing ack num, and alert any receiving thread that data was added
     fn absorb_packet(&mut self, tpack: TcpPacket) {
@@ -622,17 +652,47 @@ impl ConnectionSocket {
     }
     ///Initializes closing procedure
     pub fn close(slf: Arc<Mutex<Self>>) {
+        // First wait for all data to be sent and acknowledged
+        loop {
+            let send_complete = {
+                let slf = slf.lock().unwrap();
+                let write_buf = slf.write_buf.get_buf();
+                // Check if all data has been sent and acknowledged
+                write_buf.circ_buffer.len() == 0 && write_buf.nxt == 0 && !write_buf.probing
+            };
+            
+            if send_complete {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        
+        // Now we can proceed with the closing sequence
         let mut slf = slf.lock().unwrap();
         let new_state = {
             let state = slf.state.read().unwrap();
             match *state {
                 TcpState::Established => TcpState::FinWait1,
                 TcpState::CloseWait => TcpState::LastAck,
-                _ => return eprintln!("Closing not allowed for sockets in state: {:?}", *state)
+                _ => {
+                    eprintln!("Closing in non closing state not allowed!");
+                    return;
+                }
+
             }
         };
-        slf.send_flags(FIN | ACK); //Send FIN to TCP rpartner and changes state to FinWait1
+        
+        // Send FIN and update state
+        slf.send_flags(FIN | ACK);
         let mut state = slf.state.write().unwrap();
         *state = new_state;
+    }
+    
+    // Helper method to check if all data has been sent and acknowledged
+    pub fn is_send_complete(write_buf: &SendBuf) -> bool {
+        write_buf.circ_buffer.len() == 0 && 
+        write_buf.nxt == 0 && 
+        !write_buf.probing &&
+        write_buf.retr_queue.is_empty()
     }
 }

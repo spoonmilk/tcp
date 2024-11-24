@@ -199,4 +199,7 @@ impl RetransmissionQueue {
             None
         }
     }
+    pub fn is_empty(&self) -> bool {
+        self.queue.is_empty()
+    }
 }

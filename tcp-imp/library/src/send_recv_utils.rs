@@ -38,14 +38,14 @@ pub trait TcpBuffer {
 
 #[derive(Debug)]
 pub struct SendBuf {
-    circ_buffer: CircularBuffer<BUFFER_CAPACITY, u8>,
+    pub circ_buffer: CircularBuffer<BUFFER_CAPACITY, u8>,
     //una: usize, Don't need, b/c una will always be 0 technically
-    nxt: usize, // Pointer to next byte to be sent ; NOTE, UPDATE AS BYTES DRAINED
+    pub nxt: usize, // Pointer to next byte to be sent ; NOTE, UPDATE AS BYTES DRAINED
     //lbw: usize Don't need b/c lbw will always be circ_buffer.len() technically
     rem_window: u16,
     num_acked: u32,
     our_init_seq: u32,
-    probing: bool, //Identifies whether or not we are currently probing - a little kludgy
+    pub probing: bool, //Identifies whether or not we are currently probing - a little kludgy
     stop_probing_sender: Sender<()>,
     pub retr_queue: RetransmissionQueue,
 }
@@ -121,44 +121,27 @@ impl SendBuf {
     }
     ///Acknowledges (drops) all sent bytes up to the one indicated by most_recent_ack
     pub fn ack_data(&mut self, most_recent_ack: u32) {
-        // Calculate relative acknowledged data using checked arithmetic
-        let base = self.num_acked.checked_add(self.our_init_seq)
-            .and_then(|sum| sum.checked_add(1))
-            .expect("Sequence number overflow");
-            
-        // Use wrapping subtraction to handle sequence number wraparound
+        // Calculate relative acknowledged data using wrapping arithmetic
+        let base = self.num_acked.wrapping_add(self.our_init_seq).wrapping_add(1);
         let relative_ack = most_recent_ack.wrapping_sub(base);
         
-        // Handle probing state transition - do this first regardless of ack size
+        // Handle probing state transition
         if self.probing && relative_ack > self.nxt as u32 {
-            // Probe packet received
             self.probing = false;
             self.nxt += 1;
             self.stop_probing_sender.send(()).unwrap();
             println!("Stop probing CHANNEL signal sent");
-            return; // We're done handling the probe ack
-        }
-        
-        // For non-probe packets, validate that relative_ack is reasonable
-        if relative_ack > BUFFER_CAPACITY as u32 {
-            // If the relative ack is larger than our buffer capacity,
-            // something has gone wrong - likely a wraparound or invalid ack
-            println!("Warning: Received unexpectedly large relative ack: {}", relative_ack);
-            return;
-        }
-
-        // Handle normal cases and FIN acks
-        if relative_ack as usize == self.nxt + 1 {
+        } else if relative_ack as usize == self.nxt + 1 {
             // Handle FIN ack case
             let relative_ack = relative_ack - 1;
             self.nxt = self.nxt.saturating_sub(relative_ack as usize);
             self.circ_buffer.drain(..relative_ack as usize);
-            self.num_acked = self.num_acked.saturating_add(relative_ack);
+            self.num_acked = self.num_acked.wrapping_add(relative_ack);
         } else {
-            // Normal case
-            self.nxt = self.nxt.saturating_sub(relative_ack as usize);
-            self.circ_buffer.drain(..relative_ack as usize);
-            self.num_acked = self.num_acked.saturating_add(relative_ack);
+            // Normal case - handle any size ack
+            self.nxt = self.nxt.saturating_sub(relative_ack as usize); 
+            self.circ_buffer.drain(..std::cmp::min(relative_ack as usize, self.circ_buffer.len()));
+            self.num_acked = self.num_acked.wrapping_add(relative_ack);
         }
     }
     ///Updates the SendBuf's internal tracker of how many more bytes can be sent before filling the reciever's window
@@ -215,32 +198,45 @@ impl RecvBuf {
         let greatest_constraint = constraints.iter().min().unwrap();
         let data: Vec<u8> = self.circ_buffer.drain(..greatest_constraint).collect();
         self.bytes_read += data.len() as u32;
+        
+        println!("Read {} bytes, total bytes_read: {}, buffer_len: {}, can_receive: {}", 
+            data.len(), self.bytes_read, self.circ_buffer.len(), self.can_receive());
+        
+        if let Some(final_seq) = self.final_seq {
+            println!("Final seq: {}, expected seq: {}", final_seq, self.expected_seq());
+        }
+        
         data
     }
 
-    ///Adds the input data segment to the buffer if its sequence number is the next expected one. If not, inserts the segment into the
-    ///early arrival hashmap. If data is ever added to the buffer, the early arrivals hashmap is checked to see if it contains the
-    ///following expected segment, and the cycle continues until there are no more segments to add to the buffer
-    ///Returns the next expected sequence number (the new ack number)
     pub fn add(&mut self, seq_num: u32, data: Vec<u8>) -> u32 {
-        //println!("sequence number: {}\nexpected sequence number: {}", seq_num, self.expected_seq());
+        println!("Adding data with seq: {}, len: {}, expected seq: {}", 
+            seq_num, data.len(), self.expected_seq());
+        
         match seq_num.cmp(&self.expected_seq()) {
             cmp::Ordering::Equal => {
+                println!("In-order data received");
                 let data_slice = match data.len() > self.window() as usize {
                     true => &data[..self.window() as usize],
                     false => &data[..],
                 };
                 self.circ_buffer.extend_from_slice(data_slice);
                 if let Some(next_data) = self.early_arrivals.remove(&self.expected_seq()) {
+                    println!("Found early arrival to process");
                     return self.add(self.expected_seq(), next_data);
                 }
             }
-            cmp::Ordering::Less => {} //Drop packet, contains stale data
+            cmp::Ordering::Less => println!("Received old data"),
             cmp::Ordering::Greater => {
+                println!("Early arrival, adding to map");
                 self.early_arrivals.insert(seq_num, data);
-            } //Early arrival, add it to early arrival hashmap
+            }
         }
-        self.expected_seq()
+        
+        let exp_seq = self.expected_seq();
+        println!("New expected seq: {}, early arrivals: {}", 
+            exp_seq, self.early_arrivals.len());
+        exp_seq
     }
     ///Returns the next expected sequence number - only used privately, self.add() returns next sequence number too for public use
     fn expected_seq(&self) -> u32 {
