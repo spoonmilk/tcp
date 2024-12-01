@@ -24,7 +24,7 @@ use std::io::ErrorKind;
 //Test retransmissions and ZWP together and with closing (test send/receive file)
 //Run performance test
 
-const READ_CHUNK: usize = 1024;
+const READ_CHUNK: usize = 1000;
 
 pub struct HostRepl {
     pub backend: HostBackend,
@@ -156,17 +156,20 @@ impl HostRepl {
         // Call connect and establish a connection on the inputted ip and port
         let sid = backend.connect(ip_addr, port);
         //Let the sending begin!
-        let mut total_bytes_sent = 0; 
+        let mut total_bytes_sent: u32 = 0; 
+        let mut iter_cnt = 0;
         loop {
+            iter_cnt += 1;
             let bytes_read = file.read(&mut buf).unwrap();
             if bytes_read == 0 { break; } //We have reached EOF
-            match backend.tcp_send(sid, buf[..bytes_read].to_vec()) {
-                Ok(_) => (),
+            total_bytes_sent += match backend.tcp_send(sid, buf[..bytes_read].to_vec()) {
+                Ok(bytes_sent) => bytes_sent,
                 Err(e) => panic!("{}", e.to_string())
             };
-            total_bytes_sent += bytes_read;
+            println!("Current total bytes sent: {}", total_bytes_sent);
         }
         backend.close(sid).expect("Somehow connection socket already got removed from socket table...");
+        println!("Iter count: {iter_cnt}");
         println!("Sent {total_bytes_sent} bytes");
 
     }

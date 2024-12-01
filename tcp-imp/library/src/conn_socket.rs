@@ -499,20 +499,21 @@ impl ConnectionSocket {
     //
 
     // Loops through sending packets of max size 1500 bytes until everything's been sent
-    pub fn send(slf: Arc<Mutex<Self>>, mut to_send: Vec<u8>) -> Result<u16> {
+    pub fn send(slf: Arc<Mutex<Self>>, mut to_send: Vec<u8>) -> Result<u32> {
+        println!("CALLED");
         if !Self::send_allowed(Arc::clone(&slf)) { return Err(Error::new(ErrorKind::Unsupported, "Send not allowed - already closed socket on this side")) }
         // Condvar for checking if the buffer has been updated
-        let buf_update = Arc::new(Condvar::new());
-        let thread_buf_update = Arc::clone(&buf_update);
+        //let buf_update = Arc::new(Condvar::new());
+        //let thread_buf_update = Arc::clone(&buf_update);
         // AtomicBool for checking if the send should stop
-        let terminate_send = Arc::new(AtomicBool::new(false));
-        let thread_terminate_send = Arc::clone(&terminate_send);
+        //let terminate_send = Arc::new(AtomicBool::new(false));
+        //let thread_terminate_send = Arc::clone(&terminate_send);
+        let (so_sender, snd_recver) = channel::<SendCmd>();
 
         let thread_slf = Arc::clone(&slf);
-
         let thread_send_onwards = thread::Builder::new()
             .name("send_onwards".to_string())
-            .spawn(move || Self::send_onwards(thread_slf, thread_buf_update, thread_terminate_send))
+            .spawn(move || Self::send_onwards(thread_slf, snd_recver))
             .expect("Could not spawn thread");
 
         //Continuously wait for there to be space in the buffer and add data till buffer is full
@@ -522,34 +523,35 @@ impl ConnectionSocket {
         };
         let mut bytes_sent = 0;
         while !to_send.is_empty() {
+            println!("LOOPING");
             //Wait till send_onwards says you can access slf now
             let mut writer = write_buf.wait();
             let old_len = to_send.len();
             to_send = writer.fill_with(to_send);
             bytes_sent += old_len - to_send.len();
+            println!("Size of contents of send buffer {:?}", writer.see_amount(bytes_sent).len());
             // Notify send_onwards of buffer update
-            buf_update.notify_one();
+            //TODO: Make this only send when the buffer was previously empty
+            so_sender.send(SendCmd::DataAvailable).expect("Error sending to send onwards");
         }
-        terminate_send.store(true, Ordering::SeqCst);
-
+        println!("EXITED LOOP");
+        so_sender.send(SendCmd::Stop).expect("Error sending to send onwards");
+        println!("COMMANDED SEND ONWARDS TO STOP");
         thread_send_onwards
             .join()
             .expect("Send onwards thread panicked");
-        Ok(bytes_sent as u16)
+        println!("SEND ONWARDS JOINED");
+        //DEBUGGING
+        let slf = slf.lock().unwrap();
+        println!("Current seq num: {}", slf.seq_num);
+        Ok(bytes_sent as u32)
     }
 
-    fn send_onwards(
-        slf: Arc<Mutex<Self>>,
-        buf_update: Arc<Condvar>,
-        terminate_send: Arc<AtomicBool>,
-    ) -> () {
+    fn send_onwards(slf: Arc<Mutex<Self>>, snd_recver: Receiver<SendCmd>) -> () {
         //Grab proper resources from slf before relinquishing its lock
         let (write_buf, stop_probing_recver) = {
             let slf = slf.lock().unwrap();
-            (
-                Arc::clone(&slf.write_buf),
-                Arc::clone(&slf.stop_probing_recver),
-            )
+            (Arc::clone(&slf.write_buf), Arc::clone(&slf.stop_probing_recver))
         };
         let stop_probing_recver = stop_probing_recver.lock().unwrap(); //No other thread should need to use this while this thread is, so good to claim this lock for the duration of the threads existence
                                                                        //Start data sending loop
@@ -558,14 +560,17 @@ impl ConnectionSocket {
             let to_send = {
                 //Get data to send
                 let mut writer = write_buf.get_buf();
+                println!("SEND ONWARDS: SIZE OF CONTENTS OF SEND BUFFER: {}", writer.see_amount(10000).len());
                 writer.next_data()
             };
             match to_send {
                 NextData::Data(data) => {
                     let mut slf = slf.lock().unwrap();
                     slf.send_data(data);
+                    println!("SENT");
                 }
                 NextData::ZeroWindow(probe) => {
+                    println!("PROBING");
                     //Run a thread to zero window probe
                     let slf_clone = Arc::clone(&slf);
                     let done_probing = Arc::new(AtomicBool::new(false));
@@ -585,12 +590,11 @@ impl ConnectionSocket {
                 }
                 NextData::NoData => {
                     //Check to see if we're just done sending
-                    if terminate_send.load(Ordering::SeqCst) {
-                        return;
+                    println!("NO DATA");
+                    match snd_recver.recv().expect("Error receiving from sending thread") {
+                        SendCmd::DataAvailable => {}, //Continue, we now have data available
+                        SendCmd::Stop => return //Stop sending, we're done
                     }
-                    //Wait on stuff getting added to buffer
-                    let writer = write_buf.get_buf();
-                    let _writer = buf_update.wait(writer).unwrap(); //Kinda jank cuz _writer is never used, but is cleanest solution I could think of without adding some stupid boolean flag
                 }
             }
         }
@@ -660,7 +664,7 @@ impl ConnectionSocket {
                 let slf = slf.lock().unwrap();
                 let write_buf = slf.write_buf.get_buf();
                 // Check if all data has been sent and acknowledged
-                write_buf.circ_buffer.len() == 0 && write_buf.nxt == 0 && !write_buf.probing
+                write_buf.circ_buffer.len() == 0 && write_buf.nxt == 0 && !write_buf.probing && write_buf.retr_queue.is_empty()
             };
             
             if send_complete {
@@ -697,4 +701,9 @@ impl ConnectionSocket {
         !write_buf.probing &&
         write_buf.retr_queue.is_empty()
     }
+}
+
+enum SendCmd {
+    DataAvailable,
+    Stop
 }

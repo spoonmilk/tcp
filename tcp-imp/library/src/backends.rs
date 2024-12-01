@@ -143,7 +143,7 @@ impl HostBackend {
         None
     }
     //More to come 
-    pub fn tcp_send(&self, sid: SocketId, data: Vec<u8>) -> Result<u16> {
+    pub fn tcp_send(&self, sid: SocketId, data: Vec<u8>) -> Result<u32> {
         let sock = match self.sock_arc(&sid) {
             Some(sock) => sock,
             None => return Err(Error::new(ErrorKind::InvalidInput, "Input socket ID does not match that of any connection sockets"))
