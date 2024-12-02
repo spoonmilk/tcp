@@ -56,7 +56,7 @@ impl ConnectionSocket {
     pub fn get_sid(slf: Arc<Mutex<Self>>) -> SocketId {
         let slf = slf.lock().unwrap();
         slf.sid
-    } 
+    }
     /// Periodically does checking/elimination/retransmission from the queue and timer
     pub fn time_check(slf: Arc<Mutex<Self>>) {
         loop {
@@ -66,9 +66,9 @@ impl ConnectionSocket {
                 let retr_timer = slf.retr_timer.lock().unwrap();
                 retr_timer.rto
             };
-            
+
             thread::sleep(current_rto);
-            
+
             {
                 let mut slf = slf.lock().unwrap();
                 let retr_segs = {
@@ -80,8 +80,9 @@ impl ConnectionSocket {
                     slf.send_segment(seg.seq_num, seg.payload.clone(), seg.flags, seg.checksum);
                     {
                         let mut retr_timer = slf.retr_timer.lock().unwrap();
-                        retr_timer.do_retransmission(); 
+                        retr_timer.do_retransmission();
                     }
+                    println!("Current RTO: {}", current_rto.as_millis());
                 }
             }
         }
@@ -161,7 +162,7 @@ impl ConnectionSocket {
     }
     //NOTE: For William: Should new_ack do anything here? if not, you can just remove everything
     //except ack_rt :)
-    fn process_syn_ack(&mut self, tpack: TcpPacket) -> TcpState {  
+    fn process_syn_ack(&mut self, tpack: TcpPacket) -> TcpState {
         if has_only_flags(&tpack.header, SYN | ACK) {
             //Deal with receiving first sequence number of TCP partner
             self.set_init_ack(tpack.header.sequence_number);
@@ -172,7 +173,7 @@ impl ConnectionSocket {
         }
         TcpState::SynSent
     }
-    fn process_ack(&mut self, tpack: TcpPacket) -> TcpState { 
+    fn process_ack(&mut self, tpack: TcpPacket) -> TcpState {
         if has_only_flags(&tpack.header, ACK) {
             self.ack_rt(tpack.header.acknowledgment_number);
             return TcpState::Established;
@@ -186,8 +187,10 @@ impl ConnectionSocket {
             FINACK => {
                 //Other dude wants to close the connection
                 // Okay! I will close!
-                self.ack_num += 1; 
-                self.read_buf.get_buf().set_final_seq(tpack.header.sequence_number); //Allows receive to know when receiving is no longer allowed
+                self.ack_num += 1;
+                self.read_buf
+                    .get_buf()
+                    .set_final_seq(tpack.header.sequence_number); //Allows receive to know when receiving is no longer allowed
                 self.read_buf.alert_ready(); //Allows any receiving thread to unblock itself and terminate
                 self.send_flags(ACK);
                 return TcpState::CloseWait;
@@ -204,9 +207,9 @@ impl ConnectionSocket {
         // Transitions to FinWait2 upon reception of an ACK for its FIN
         match header_flags(&tpack.header) {
             ACK if tpack.payload.len() == 0 => {
-                // First, handle the acknowledgment 
+                // First, handle the acknowledgment
                 self.ack(tpack.clone());
-                
+
                 // Check if this was an ack for our FIN
                 if tpack.header.acknowledgment_number == self.seq_num {
                     return TcpState::FinWait2;
@@ -253,11 +256,11 @@ impl ConnectionSocket {
                 if !tpack.payload.is_empty() {
                     self.absorb_packet(tpack.clone());
                 }
-                
+
                 // Then handle the FIN
                 self.ack_num += 1;
                 self.send_flags(ACK);
-                
+
                 // Start the TIME_WAIT timer
                 thread::spawn(move || Self::wait_then_close(slf_clone));
                 TcpState::TimeWait
@@ -329,7 +332,7 @@ impl ConnectionSocket {
         //Absorb packet
         self.absorb_packet(tpack);
         //Send acknowledgement for received data
-        self.send_flags(ACK); 
+        self.send_flags(ACK);
     }
     ///Handles adding the data from the packet to the recv buffer, incrementing ack num, and alert any receiving thread that data was added
     fn absorb_packet(&mut self, tpack: TcpPacket) {
@@ -354,7 +357,9 @@ impl ConnectionSocket {
     fn wait_then_close(slf: Arc<Mutex<Self>>) {
         thread::sleep(Duration::from_millis(2 * MAX_RTO));
         let slf = slf.lock().unwrap();
-        slf.closed_sender.send(slf.sid).expect("Error sending to closing thread");
+        slf.closed_sender
+            .send(slf.sid)
+            .expect("Error sending to closing thread");
         let mut state = slf.state.write().unwrap();
         *state = TcpState::Closed;
     }
@@ -377,7 +382,7 @@ impl ConnectionSocket {
     fn ack_rt(&mut self, ack_num: u32) {
         let mut write_buf = self.write_buf.get_buf();
         let retr_queue = &mut write_buf.retr_queue;
-        if let Some(measured_rtt) = retr_queue.calculate_rtt(ack_num) { 
+        if let Some(measured_rtt) = retr_queue.calculate_rtt(ack_num) {
             let mut retr_timer = self.retr_timer.lock().unwrap();
             retr_timer.update_rto(measured_rtt);
             retr_timer.reset();
@@ -496,7 +501,12 @@ impl ConnectionSocket {
 
     // Loops through sending packets of max size 1500 bytes until everything's been sent
     pub fn send(slf: Arc<Mutex<Self>>, mut to_send: Vec<u8>) -> Result<u32> {
-        if !Self::send_allowed(Arc::clone(&slf)) { return Err(Error::new(ErrorKind::Unsupported, "Send not allowed - already closed socket on this side")) }
+        if !Self::send_allowed(Arc::clone(&slf)) {
+            return Err(Error::new(
+                ErrorKind::Unsupported,
+                "Send not allowed - already closed socket on this side",
+            ));
+        }
         // Condvar for checking if the buffer has been updated
         //let buf_update = Arc::new(Condvar::new());
         //let thread_buf_update = Arc::clone(&buf_update);
@@ -522,9 +532,13 @@ impl ConnectionSocket {
             let old_len = to_send.len();
             to_send = writer.fill_with(to_send);
             bytes_sent += old_len - to_send.len();
-            so_sender.send(SendCmd::DataAvailable).expect("Error sending to send onwards");
+            so_sender
+                .send(SendCmd::DataAvailable)
+                .expect("Error sending to send onwards");
         }
-        so_sender.send(SendCmd::Stop).expect("Error sending to send onwards");
+        so_sender
+            .send(SendCmd::Stop)
+            .expect("Error sending to send onwards");
         thread_send_onwards
             .join()
             .expect("Send onwards thread panicked");
@@ -535,7 +549,10 @@ impl ConnectionSocket {
         //Grab proper resources from slf before relinquishing its lock
         let (write_buf, stop_probing_recver) = {
             let slf = slf.lock().unwrap();
-            (Arc::clone(&slf.write_buf), Arc::clone(&slf.stop_probing_recver))
+            (
+                Arc::clone(&slf.write_buf),
+                Arc::clone(&slf.stop_probing_recver),
+            )
         };
         let stop_probing_recver = stop_probing_recver.lock().unwrap(); //No other thread should need to use this while this thread is, so good to claim this lock for the duration of the threads existence
                                                                        //Start data sending loop
@@ -570,9 +587,12 @@ impl ConnectionSocket {
                 }
                 NextData::NoData => {
                     //Check to see if we're just done sending
-                    match snd_recver.recv().expect("Error receiving from sending thread") {
-                        SendCmd::DataAvailable => {}, //Continue, we now have data available
-                        SendCmd::Stop => return //Stop sending, we're done
+                    match snd_recver
+                        .recv()
+                        .expect("Error receiving from sending thread")
+                    {
+                        SendCmd::DataAvailable => {} //Continue, we now have data available
+                        SendCmd::Stop => return,     //Stop sending, we're done
                     }
                 }
             }
@@ -587,7 +607,7 @@ impl ConnectionSocket {
             thread::sleep(Duration::from_millis(ZWP_TIMEOUT));
             if done_probing.load(Ordering::SeqCst) {
                 return;
-            } //Stop probing 
+            } //Stop probing
             let mut slf = slf.lock().unwrap();
             slf.send_probe(probe_data.clone());
             drop(slf);
@@ -596,27 +616,46 @@ impl ConnectionSocket {
     fn send_allowed(slf: Arc<Mutex<Self>>) -> bool {
         let slf = slf.lock().unwrap();
         let proper_state = match *slf.state.read().unwrap() {
-            TcpState::FinWait1 | TcpState::FinWait2 | TcpState::TimeWait | TcpState::LastAck | TcpState::Closed => false,
-            _ => true
+            TcpState::FinWait1
+            | TcpState::FinWait2
+            | TcpState::TimeWait
+            | TcpState::LastAck
+            | TcpState::Closed => false,
+            _ => true,
         };
         proper_state
     }
     pub fn receive(slf: Arc<Mutex<Self>>, bytes: u16) -> Result<Vec<u8>> {
-        if !Self::receive_allowed(Arc::clone(&slf)) { return Err(Error::new(ErrorKind::Unsupported, "Reception not allow; there's nothing left to receive")) }
+        if !Self::receive_allowed(Arc::clone(&slf)) {
+            return Err(Error::new(
+                ErrorKind::Unsupported,
+                "Reception not allow; there's nothing left to receive",
+            ));
+        }
         let read_buf = {
             let slf = slf.lock().unwrap();
             Arc::clone(&slf.read_buf)
         };
         let mut recv_buf: std::sync::MutexGuard<'_, RecvBuf> = read_buf.wait();
         let received = recv_buf.read(bytes);
-        if received.len() == 0 { return Err(Error::new(ErrorKind::Unsupported, "Reception not allow; there's nothing left to receive")) }
+        if received.len() == 0 {
+            return Err(Error::new(
+                ErrorKind::Unsupported,
+                "Reception not allow; there's nothing left to receive",
+            ));
+        }
         Ok(received)
     }
     fn receive_allowed(slf: Arc<Mutex<Self>>) -> bool {
         let slf = slf.lock().unwrap();
-        let proper_state = match *slf.state.read().unwrap() { //Proper state is any state where close() hasn't already been called on us
-            TcpState::FinWait1 | TcpState::FinWait2 | TcpState::TimeWait | TcpState::LastAck | TcpState::Closed => false,
-            _ => true
+        let proper_state = match *slf.state.read().unwrap() {
+            //Proper state is any state where close() hasn't already been called on us
+            TcpState::FinWait1
+            | TcpState::FinWait2
+            | TcpState::TimeWait
+            | TcpState::LastAck
+            | TcpState::Closed => false,
+            _ => true,
         };
         let data_out_there = slf.read_buf.get_buf().can_receive();
         proper_state && data_out_there
@@ -639,15 +678,18 @@ impl ConnectionSocket {
                 let slf = slf.lock().unwrap();
                 let write_buf = slf.write_buf.get_buf();
                 // Check if all data has been sent and acknowledged
-                write_buf.circ_buffer.len() == 0 && write_buf.nxt == 0 && !write_buf.probing && write_buf.retr_queue.is_empty()
+                write_buf.circ_buffer.len() == 0
+                    && write_buf.nxt == 0
+                    && !write_buf.probing
+                    && write_buf.retr_queue.is_empty()
             };
-            
+
             if send_complete {
                 break;
             }
             thread::sleep(Duration::from_millis(10));
         }
-        
+
         // Now we can proceed with the closing sequence
         let mut slf = slf.lock().unwrap();
         let new_state = {
@@ -659,26 +701,26 @@ impl ConnectionSocket {
                     eprintln!("Closing in non closing state not allowed!");
                     return;
                 }
-
             }
         };
-        
+
         // Send FIN and update state
         slf.send_flags(FIN | ACK);
         let mut state = slf.state.write().unwrap();
         *state = new_state;
     }
-    
+
     // Helper method to check if all data has been sent and acknowledged
     pub fn is_send_complete(write_buf: &SendBuf) -> bool {
-        write_buf.circ_buffer.len() == 0 && 
-        write_buf.nxt == 0 && 
-        !write_buf.probing &&
-        write_buf.retr_queue.is_empty()
+        write_buf.circ_buffer.len() == 0
+            && write_buf.nxt == 0
+            && !write_buf.probing
+            && write_buf.retr_queue.is_empty()
     }
 }
 
 enum SendCmd {
     DataAvailable,
-    Stop
+    Stop,
 }
+

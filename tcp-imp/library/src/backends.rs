@@ -139,7 +139,7 @@ impl HostBackend {
                     panic!("Connection failed - socket closed during handshake");
                 }
                 _ => {
-                    thread::sleep(Duration::from_micros(1));
+                    thread::sleep(Duration::from_micros(10));
                     continue;
                 }
             }
