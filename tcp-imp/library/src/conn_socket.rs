@@ -338,15 +338,14 @@ impl ConnectionSocket {
     }
     ///Handles dropping all data associated with sequence numbers less than the ack number of the packet we just received and syncing this with retransmissions
     fn ack(&mut self, tpack: TcpPacket) {
-        // Handle potential fast retransmit first
-        let maybe_retr = {
+        let ack_num = tpack.header.acknowledgment_number;
+        
+        // Handle fast retransmit possibility first
+        if let Some(seg) = {
             let mut send_buf = self.write_buf.get_buf();
-            send_buf.retr_queue.remove_acked_segments(tpack.header.acknowledgment_number);
-            send_buf.retr_queue.check_fast_retransmit()
-        };
-
-        if let Some(seg) = maybe_retr {
-            println!("Fast retransmit triggered for seq={}", seg.seq_num);
+            send_buf.retr_queue.remove_acked_segments(ack_num)
+        } {
+            println!("Fast retransmit for seq={}", seg.seq_num);
             self.send_segment(seg.seq_num, seg.payload.clone(), seg.flags, seg.checksum);
             return;
         }
@@ -354,9 +353,9 @@ impl ConnectionSocket {
         // Normal ACK processing
         {
             let mut send_buf = self.write_buf.get_buf();
-            send_buf.ack_data(tpack.header.acknowledgment_number);
+            send_buf.ack_data(ack_num);
         }
-        self.ack_rt(tpack.header.acknowledgment_number);
+        self.ack_rt(ack_num);
     }
     fn enter_closed(&self) {
         self.closed_sender.send(self.sid).unwrap();

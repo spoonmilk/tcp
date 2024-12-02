@@ -1,5 +1,6 @@
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
+use std::collections::HashMap;
 
 /* Algorithm for calculatating RTO and successive:
 
@@ -150,23 +151,41 @@ impl RetransmissionQueue {
     pub fn new() -> RetransmissionQueue {
         RetransmissionQueue {
             queue: VecDeque::new(),
-            dup_ack_count: 0,
             last_ack: 0,
+            dup_ack_count: 0
         }
     }
-    pub fn remove_acked_segments(&mut self, ack_num: u32) {
+    pub fn remove_acked_segments(&mut self, ack_num: u32) -> Option<RetrSegment> {
+        // Check for duplicate ACKs
         if ack_num == self.last_ack {
             self.dup_ack_count += 1;
+            // Only consider fast retransmit on exactly the third duplicate ACK
+            if self.dup_ack_count == 3 {
+                if let Some(front) = self.queue.front() {
+                    if front.seq_num == ack_num {
+                        return Some(front.clone());
+                    }
+                }
+            }
         } else {
+            // New ACK resets duplicate count
             self.dup_ack_count = 0;
             self.last_ack = ack_num;
-            self.queue.retain(|s| s.seq_num >= ack_num);
+            // Remove acknowledged segments
+            while let Some(front) = self.queue.front() {
+                if front.seq_num < ack_num {
+                    self.queue.pop_front();
+                } else {
+                    break;
+                }
+            }
         }
+        None
     }
     pub fn get_next_timeout(&mut self, current_rto: Duration) -> Option<RetrSegment> {
         if let Some(front) = self.queue.front_mut() {
             if front.timed_out(current_rto) {
-                if front.retransmission_count > MAX_RETRANSMISSIONS {
+                if front.retransmission_count >= MAX_RETRANSMISSIONS {
                     println!("Dropping segment seq={}", front.seq_num);
                     self.queue.pop_front();
                     return None;
@@ -175,13 +194,6 @@ impl RetransmissionQueue {
                 front.update_time_of_send();
                 return Some(front.clone());
             }
-        }
-        None
-    }
-    pub fn check_fast_retransmit(&mut self) -> Option<RetrSegment> {
-        if self.dup_ack_count == 3 {
-            self.dup_ack_count = 0;
-            return self.queue.front().cloned();
         }
         None
     }
@@ -223,12 +235,9 @@ impl RetransmissionQueue {
     //     timed_out_segments
     // }
     pub fn calculate_rtt(&self, ack_num: u32) -> Option<Duration> {
-        // Find the oldest unacknowledged segment that is being acknowledged by ack_num
-        if let Some(segment) = self.queue.iter().find(|s| s.seq_num < ack_num) {
-            Some(Instant::now().duration_since(segment.time_of_send))
-        } else {
-            None
-        }
+        self.queue.front()
+            .filter(|s| s.seq_num < ack_num && s.retransmission_count == 0)
+            .map(|s| Instant::now().duration_since(s.time_of_send))
     }
     pub fn is_empty(&self) -> bool {
         self.queue.is_empty()
