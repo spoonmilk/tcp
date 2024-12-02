@@ -80,8 +80,7 @@ impl ConnectionSocket {
                     slf.send_segment(seg.seq_num, seg.payload.clone(), seg.flags, seg.checksum);
                     {
                         let mut retr_timer = slf.retr_timer.lock().unwrap();
-                        retr_timer.do_retransmission();
-                        println!("Current rto: {}", retr_timer.rto.as_millis());
+                        retr_timer.do_retransmission(); 
                     }
                 }
             }
@@ -162,8 +161,7 @@ impl ConnectionSocket {
     }
     //NOTE: For William: Should new_ack do anything here? if not, you can just remove everything
     //except ack_rt :)
-    fn process_syn_ack(&mut self, tpack: TcpPacket) -> TcpState {
-        println!("Processing a syn | ack for my ack");
+    fn process_syn_ack(&mut self, tpack: TcpPacket) -> TcpState {  
         if has_only_flags(&tpack.header, SYN | ACK) {
             //Deal with receiving first sequence number of TCP partner
             self.set_init_ack(tpack.header.sequence_number);
@@ -174,8 +172,7 @@ impl ConnectionSocket {
         }
         TcpState::SynSent
     }
-    fn process_ack(&mut self, tpack: TcpPacket) -> TcpState {
-        println!("Processing an ack for my syn | ack");
+    fn process_ack(&mut self, tpack: TcpPacket) -> TcpState { 
         if has_only_flags(&tpack.header, ACK) {
             self.ack_rt(tpack.header.acknowledgment_number);
             return TcpState::Established;
@@ -380,8 +377,7 @@ impl ConnectionSocket {
     fn ack_rt(&mut self, ack_num: u32) {
         let mut write_buf = self.write_buf.get_buf();
         let retr_queue = &mut write_buf.retr_queue;
-        if let Some(measured_rtt) = retr_queue.calculate_rtt(ack_num) {
-            // println!("Time until return: {}", measured_rtt.as_millis());
+        if let Some(measured_rtt) = retr_queue.calculate_rtt(ack_num) { 
             let mut retr_timer = self.retr_timer.lock().unwrap();
             retr_timer.update_rto(measured_rtt);
             retr_timer.reset();
@@ -500,7 +496,6 @@ impl ConnectionSocket {
 
     // Loops through sending packets of max size 1500 bytes until everything's been sent
     pub fn send(slf: Arc<Mutex<Self>>, mut to_send: Vec<u8>) -> Result<u32> {
-        println!("CALLED");
         if !Self::send_allowed(Arc::clone(&slf)) { return Err(Error::new(ErrorKind::Unsupported, "Send not allowed - already closed socket on this side")) }
         // Condvar for checking if the buffer has been updated
         //let buf_update = Arc::new(Condvar::new());
@@ -523,27 +518,16 @@ impl ConnectionSocket {
         };
         let mut bytes_sent = 0;
         while !to_send.is_empty() {
-            println!("LOOPING");
-            //Wait till send_onwards says you can access slf now
             let mut writer = write_buf.wait();
             let old_len = to_send.len();
             to_send = writer.fill_with(to_send);
             bytes_sent += old_len - to_send.len();
-            println!("Size of contents of send buffer {:?}", writer.see_amount(bytes_sent).len());
-            // Notify send_onwards of buffer update
-            //TODO: Make this only send when the buffer was previously empty
             so_sender.send(SendCmd::DataAvailable).expect("Error sending to send onwards");
         }
-        println!("EXITED LOOP");
         so_sender.send(SendCmd::Stop).expect("Error sending to send onwards");
-        println!("COMMANDED SEND ONWARDS TO STOP");
         thread_send_onwards
             .join()
             .expect("Send onwards thread panicked");
-        println!("SEND ONWARDS JOINED");
-        //DEBUGGING
-        let slf = slf.lock().unwrap();
-        println!("Current seq num: {}", slf.seq_num);
         Ok(bytes_sent as u32)
     }
 
@@ -555,22 +539,18 @@ impl ConnectionSocket {
         };
         let stop_probing_recver = stop_probing_recver.lock().unwrap(); //No other thread should need to use this while this thread is, so good to claim this lock for the duration of the threads existence
                                                                        //Start data sending loop
-                                                                       //let mut snd_state = SendState::Sending;
         loop {
             let to_send = {
                 //Get data to send
                 let mut writer = write_buf.get_buf();
-                println!("SEND ONWARDS: SIZE OF CONTENTS OF SEND BUFFER: {}", writer.see_amount(10000).len());
                 writer.next_data()
             };
             match to_send {
                 NextData::Data(data) => {
                     let mut slf = slf.lock().unwrap();
                     slf.send_data(data);
-                    println!("SENT");
                 }
                 NextData::ZeroWindow(probe) => {
-                    println!("PROBING");
                     //Run a thread to zero window probe
                     let slf_clone = Arc::clone(&slf);
                     let done_probing = Arc::new(AtomicBool::new(false));
@@ -590,7 +570,6 @@ impl ConnectionSocket {
                 }
                 NextData::NoData => {
                     //Check to see if we're just done sending
-                    println!("NO DATA");
                     match snd_recver.recv().expect("Error receiving from sending thread") {
                         SendCmd::DataAvailable => {}, //Continue, we now have data available
                         SendCmd::Stop => return //Stop sending, we're done
@@ -608,8 +587,7 @@ impl ConnectionSocket {
             thread::sleep(Duration::from_millis(ZWP_TIMEOUT));
             if done_probing.load(Ordering::SeqCst) {
                 return;
-            } //Stop probing
-            println!("Zero window probing: {probe_data:?}");
+            } //Stop probing 
             let mut slf = slf.lock().unwrap();
             slf.send_probe(probe_data.clone());
             drop(slf);
@@ -644,10 +622,7 @@ impl ConnectionSocket {
         proper_state && data_out_there
     }
     fn send_segment(&mut self, seq_num: u32, payload: Vec<u8>, flags: u8, checksum: u16) {
-        let my_payload = String::from_utf8(payload.clone()).unwrap();
-        println!("Retransmitting payload: {}", my_payload);
         let mut tpack: TcpPacket = self.build_packet(payload, flags);
-        println!("Packet ack num: {}", tpack.header.acknowledgment_number);
         tpack.header.checksum = checksum;
         tpack.header.sequence_number = seq_num;
         let pbasis = self.packet_basis(tpack);

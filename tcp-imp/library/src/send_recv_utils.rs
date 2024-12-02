@@ -78,8 +78,7 @@ impl SendBuf {
             .drain(..std::cmp::min(available_spc, filler.len()))
             .collect::<Vec<u8>>();
 
-        self.circ_buffer.extend_from_slice(&to_add[..]);
-        // println!("Adding this data: {to_add:?}");
+        self.circ_buffer.extend_from_slice(&to_add[..]); 
         filler
     }
     ///Returns a vector of data to be put in the next TcpPacket to send, taking into account the input window size of the receiver
@@ -88,8 +87,7 @@ impl SendBuf {
         let nxt_data = if self.rem_window == 0 {
             //Zero window probing
             self.probing = true;
-            let data = self.see_amount(1);
-            println!("Preparing to zero window probe this data: {data:?}");
+            let data = self.see_amount(1); 
             data
         } else {
             //Normal data for next packet
@@ -122,7 +120,6 @@ impl SendBuf {
     ///Acknowledges (drops) all sent bytes up to the one indicated by most_recent_ack
     pub fn ack_data(&mut self, most_recent_ack: u32) {
         // Caclulate relative acknowledged data
-        //println!("MRA: {}, SUBTRACTOR: {}", most_recent_ack, self.num_acked + self.our_init_seq + 1);
         let expected_ack = self.num_acked + self.our_init_seq + 1;
         if most_recent_ack < expected_ack { return; } //Old packet
         let mut relative_ack = most_recent_ack - expected_ack;
@@ -130,8 +127,7 @@ impl SendBuf {
         if self.probing && relative_ack > self.nxt as u32 { //Probe packet received
             self.probing = false;
             self.nxt += 1;
-            self.stop_probing_sender.send(()).unwrap();
-            println!("Stop probing CHANNEL signal sent");
+            self.stop_probing_sender.send(()).unwrap();  
         } else if relative_ack as usize == self.nxt + 1 { //Our FIN is being acked - kinda kludgy
             relative_ack -= 1
         }
@@ -140,31 +136,6 @@ impl SendBuf {
         // Drain out acknowledged data
         self.circ_buffer.drain(..relative_ack as usize);
         self.num_acked += relative_ack;
-
-        // Calculate relative acknowledged data using wrapping arithmetic
-        /*let base = self.num_acked.wrapping_add(self.our_init_seq).wrapping_add(1);
-        let relative_ack = most_recent_ack.wrapping_sub(base);
-        
-        // Handle probing state transition
-        if self.probing && relative_ack > self.nxt as u32 {
-            self.probing = false;
-            self.nxt += 1;
-            self.stop_probing_sender.send(()).unwrap();
-            println!("Stop probing CHANNEL signal sent");
-        } else if relative_ack as usize == self.nxt + 1 {
-            println!("FIN CASE?!?!?");
-            // Handle FIN ack case
-            let relative_ack = relative_ack - 1;
-            self.nxt = self.nxt.saturating_sub(relative_ack as usize);
-            self.circ_buffer.drain(..relative_ack as usize);
-            self.num_acked = self.num_acked.wrapping_add(relative_ack);
-        } else {
-            println!("ACKDATA OCCURRED AND DATA WAS REMOVED!!! RELATIVE ACK: {}", relative_ack);
-            // Normal case - handle any size ack
-            self.nxt = self.nxt.saturating_sub(relative_ack as usize); 
-            self.circ_buffer.drain(..std::cmp::min(relative_ack as usize, self.circ_buffer.len()));
-            self.num_acked = self.num_acked.wrapping_add(relative_ack);
-        }*/
     }
     ///Updates the SendBuf's internal tracker of how many more bytes can be sent before filling the reciever's window
     pub fn update_window(&mut self, new_window: u16) {
