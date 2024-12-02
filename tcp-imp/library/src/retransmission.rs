@@ -142,13 +142,54 @@ impl RetrSegment {
 #[derive(Debug)]
 pub struct RetransmissionQueue {
     pub queue: VecDeque<RetrSegment>,
+    dup_ack_count: u32,
+    last_ack: u32,
 }
 
 impl RetransmissionQueue {
     pub fn new() -> RetransmissionQueue {
         RetransmissionQueue {
             queue: VecDeque::new(),
+            dup_ack_count: 0,
+            last_ack: 0,
         }
+    }
+
+    // Modify existing method to handle duplicate ACKs
+    pub fn remove_acked_segments(&mut self, ack_num: u32) {
+        if ack_num == self.last_ack {
+            self.dup_ack_count += 1;
+        } else {
+            self.dup_ack_count = 0;
+            self.last_ack = ack_num;
+            self.queue.retain(|s| s.seq_num >= ack_num);
+        }
+    }
+
+    // Replace get_timed_out_segments with this simpler method
+    pub fn get_next_timeout(&mut self, current_rto: Duration) -> Option<RetrSegment> {
+        if let Some(front) = self.queue.front_mut() {
+            if front.timed_out(current_rto) {
+                if front.retransmission_count >= MAX_RETRANSMISSIONS {
+                    println!("Dropping segment seq={}", front.seq_num);
+                    self.queue.pop_front();
+                    return None;
+                }
+                front.retransmission_count += 1;
+                front.update_time_of_send();
+                return Some(front.clone());
+            }
+        }
+        None
+    }
+
+    // Add method to check for fast retransmit
+    pub fn check_fast_retransmit(&mut self) -> Option<RetrSegment> {
+        if self.dup_ack_count == 3 {
+            self.dup_ack_count = 0;
+            return self.queue.front().cloned();
+        }
+        None
     }
     /// Adds a retransmission segment to the queue
     pub fn add_segment(&mut self, seq_num: u32, data: Vec<u8>, flags: u8, checksum: u16) {
@@ -186,9 +227,6 @@ impl RetransmissionQueue {
             }
         });
         timed_out_segments
-    }
-    pub fn remove_acked_segments(&mut self, ack_num: u32) { 
-        self.queue.retain(|s| s.seq_num >= ack_num);
     }
     pub fn calculate_rtt(&self, ack_num: u32) -> Option<Duration> {
         // Find the oldest unacknowledged segment that is being acknowledged by ack_num

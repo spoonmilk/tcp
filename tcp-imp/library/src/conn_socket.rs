@@ -60,7 +60,6 @@ impl ConnectionSocket {
     /// Periodically does checking/elimination/retransmission from the queue and timer
     pub fn time_check(slf: Arc<Mutex<Self>>) {
         loop {
-            // Get current RTO for this iteration
             let current_rto = {
                 let slf = slf.lock().unwrap();
                 let retr_timer = slf.retr_timer.lock().unwrap();
@@ -69,21 +68,17 @@ impl ConnectionSocket {
 
             thread::sleep(current_rto);
 
-            {
-                let mut slf = slf.lock().unwrap();
-                let retr_segs = {
-                    let write_buf = Arc::clone(&slf.write_buf);
-                    let mut writer = write_buf.get_buf();
-                    writer.check_timeouts(current_rto)
-                };
-                for seg in retr_segs {
-                    slf.send_segment(seg.seq_num, seg.payload.clone(), seg.flags, seg.checksum);
-                    {
-                        let mut retr_timer = slf.retr_timer.lock().unwrap();
-                        retr_timer.do_retransmission();
-                    }
-                    println!("Current RTO: {}", current_rto.as_millis());
+            let mut slf = slf.lock().unwrap();
+            if let Some(seg) = {
+                let write_buf = Arc::clone(&slf.write_buf);
+                let mut writer = write_buf.get_buf();
+                writer.retr_queue.get_next_timeout(current_rto)
+            } {
+                {
+                    let mut retr_timer = slf.retr_timer.lock().unwrap();
+                    retr_timer.do_retransmission();
                 }
+                slf.send_segment(seg.seq_num, seg.payload.clone(), seg.flags, seg.checksum);
             }
         }
     }
@@ -343,12 +338,24 @@ impl ConnectionSocket {
     }
     ///Handles dropping all data associated with sequence numbers less than the ack number of the packet we just received and syncing this with retransmissions
     fn ack(&mut self, tpack: TcpPacket) {
-        //Ack data internally within the send buffer
+        // Handle potential fast retransmit first
+        let maybe_retr = {
+            let mut send_buf = self.write_buf.get_buf();
+            send_buf.retr_queue.remove_acked_segments(tpack.header.acknowledgment_number);
+            send_buf.retr_queue.check_fast_retransmit()
+        };
+
+        if let Some(seg) = maybe_retr {
+            println!("Fast retransmit triggered for seq={}", seg.seq_num);
+            self.send_segment(seg.seq_num, seg.payload.clone(), seg.flags, seg.checksum);
+            return;
+        }
+
+        // Normal ACK processing
         {
             let mut send_buf = self.write_buf.get_buf();
             send_buf.ack_data(tpack.header.acknowledgment_number);
         }
-        // Remove ack'd packets from retransmission queue
         self.ack_rt(tpack.header.acknowledgment_number);
     }
     fn enter_closed(&self) {
