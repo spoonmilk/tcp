@@ -141,11 +141,11 @@ impl SendBuf {
     pub fn update_window(&mut self, new_window: u16) {
         self.rem_window = new_window;
     }
-    pub fn check_timeouts(&mut self, current_rto: Duration) -> Vec<RetrSegment> {
-        let timed_out_segments: Vec<RetrSegment> =
-            { self.retr_queue.get_timed_out_segments(current_rto) };
-        timed_out_segments
-    }
+    // pub fn check_timeouts(&mut self, current_rto: Duration) -> Vec<RetrSegment> {
+    //     let timed_out_segments: Vec<RetrSegment> =
+    //         { self.retr_queue.get_timed_out_segments(current_rto) };
+    //     timed_out_segments
+    // }
     pub fn still_sending(&self) -> bool {
         self.circ_buffer.len() == 0 && self.nxt == 0 && !self.probing && self.retr_queue.is_empty()
     }
