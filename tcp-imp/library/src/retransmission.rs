@@ -1,6 +1,6 @@
+use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
-use std::collections::HashMap;
 
 /* Algorithm for calculatating RTO and successive:
 
@@ -33,7 +33,7 @@ CONSTANTS:
 
 // NOTE: These should be 1 millisecond and 60000 milliseconds for turn in
 // CONSTANTS
-const MIN_RTO: u64 = 150; // Milliseconds
+const MIN_RTO: u64 = 1; // Milliseconds
 pub const MAX_RTO: u64 = 60000; // Milliseconds
 const MAX_RETRANSMISSIONS: u32 = 3;
 
@@ -152,7 +152,7 @@ impl RetransmissionQueue {
         RetransmissionQueue {
             queue: VecDeque::new(),
             last_ack: 0,
-            dup_ack_count: 0
+            dup_ack_count: 0,
         }
     }
     pub fn remove_acked_segments(&mut self, ack_num: u32) -> Option<RetrSegment> {
@@ -235,7 +235,8 @@ impl RetransmissionQueue {
     //     timed_out_segments
     // }
     pub fn calculate_rtt(&self, ack_num: u32) -> Option<Duration> {
-        self.queue.front()
+        self.queue
+            .front()
             .filter(|s| s.seq_num < ack_num && s.retransmission_count == 0)
             .map(|s| Instant::now().duration_since(s.time_of_send))
     }
