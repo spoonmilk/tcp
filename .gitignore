@@ -30,3 +30,5 @@ test-recv2.txt
 our-imp-capture.pcapng
 their-imp-capture.pcapng
 their-imp2.pcapng
+test-large-us.pcapng
+drop2.json
