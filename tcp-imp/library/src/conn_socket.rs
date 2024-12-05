@@ -339,7 +339,7 @@ impl ConnectionSocket {
     ///Handles dropping all data associated with sequence numbers less than the ack number of the packet we just received and syncing this with retransmissions
     fn ack(&mut self, tpack: TcpPacket) {
         let ack_num = tpack.header.acknowledgment_number;
-        
+
         // Handle fast retransmit possibility first
         if let Some(seg) = {
             let mut send_buf = self.write_buf.get_buf();
@@ -526,7 +526,6 @@ impl ConnectionSocket {
             .name("send_onwards".to_string())
             .spawn(move || Self::send_onwards(thread_slf, snd_recver))
             .expect("Could not spawn thread");
-
         //Continuously wait for there to be space in the buffer and add data till buffer is full
         let write_buf = {
             let slf = slf.lock().unwrap();
@@ -729,4 +728,3 @@ enum SendCmd {
     DataAvailable,
     Stop,
 }
-

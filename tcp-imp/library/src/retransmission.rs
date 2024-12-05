@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
@@ -33,7 +32,7 @@ CONSTANTS:
 
 // NOTE: These should be 1 millisecond and 60000 milliseconds for turn in
 // CONSTANTS
-const MIN_RTO: u64 = 1; // Milliseconds
+const MIN_RTO: u64 = 10; // Milliseconds
 pub const MAX_RTO: u64 = 60000; // Milliseconds
 const MAX_RETRANSMISSIONS: u32 = 3;
 
