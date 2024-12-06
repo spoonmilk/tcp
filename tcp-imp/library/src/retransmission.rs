@@ -112,7 +112,7 @@ pub struct RetrSegment {
     pub seq_num: u32,
     pub payload: Vec<u8>,
     pub flags: u8,
-    time_of_send: Instant,
+    pub time_of_send: Instant,
     pub checksum: u16,
     pub retransmission_count: u32,
 }
@@ -151,7 +151,7 @@ impl RetransmissionQueue {
             queue: VecDeque::new(),
         }
     }
-    pub fn remove_acked_segments(&mut self, ack_num: u32) {
+    pub fn remove_acked_segments(&mut self, ack_num: u32) -> Option<RetrSegment> {
         while let Some(front) = self.queue.front() {
             if front.seq_num < ack_num {
                 self.queue.pop_front();
@@ -159,6 +159,7 @@ impl RetransmissionQueue {
                 break;
             }
         }
+        None
     }
     pub fn add_segment(&mut self, seq_num: u32, data: Vec<u8>, flags: u8, checksum: u16) {
         let segment = RetrSegment::new(seq_num, data, flags, checksum);
@@ -173,15 +174,7 @@ impl RetransmissionQueue {
         } else {
             self.queue.push_back(segment);
         }
-    }
-
-    // RTT calculation remains unchanged
-    pub fn calculate_rtt(&self, ack_num: u32) -> Option<Duration> {
-        self.queue
-            .front()
-            .filter(|s| s.seq_num < ack_num && s.retransmission_count == 0)
-            .map(|s| Instant::now().duration_since(s.time_of_send))
-    }
+    } 
 
     pub fn is_empty(&self) -> bool {
         self.queue.is_empty()

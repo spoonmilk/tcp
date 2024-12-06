@@ -428,12 +428,11 @@ impl ConnectionSocket {
     fn ack_rt(&mut self, ack_num: u32) {
         let mut write_buf = self.write_buf.get_buf();
         let retr_queue = &mut write_buf.retr_queue;
-        if let Some(measured_rtt) = retr_queue.calculate_rtt(ack_num) {
+        if let Some(seg) = retr_queue.remove_acked_segments(ack_num) {
             let mut retr_timer = self.retr_timer.lock().unwrap();
-            retr_timer.update_rto(measured_rtt);
+            retr_timer.update_rto(Instant::now().duration_since(seg.time_of_send));
             retr_timer.reset();
         }
-        retr_queue.remove_acked_segments(ack_num);
     }
 
     // TODO: CLEAN UP HORRIBLE UGLY ADDING TO RETRANSMISSION QUEUE
