@@ -141,6 +141,12 @@ Because some window updates are being transmitted that are actually dup acks (an
 we have extremely frequent fast retransmission triggers which are then caught by
 wireshark as spurious despite technically being correct.
 
+Another issue that points to our bugs stemming from the IP layer is the weird behavior
+that happens with low RTO values. Things get sent out of order, retransmitted strangely,
+and just generally don't function as they should, but are immediately behaving differently
+with higher RTO values. Along with our performance, this leads us to believe
+these issues are at their core on the IP layer.
+
 ## Performance Measurement and Capture
 
 ### Measuring Performance

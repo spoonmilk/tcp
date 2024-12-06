@@ -33,7 +33,7 @@ CONSTANTS:
 
 // NOTE: These should be 1 millisecond and 60000 milliseconds for turn in
 // CONSTANTS
-const MIN_RTO: u64 = 100; // Milliseconds
+const MIN_RTO: u64 = 10; // Milliseconds
 pub const MAX_RTO: u64 = 60000; // Milliseconds
 const MAX_RETRANSMISSIONS: u32 = 3;
 
@@ -153,7 +153,7 @@ impl RetransmissionQueue {
     }
     pub fn remove_acked_segments(&mut self, ack_num: u32) {
         while let Some(front) = self.queue.front() {
-            if front.seq_num < ack_num { 
+            if front.seq_num < ack_num {
                 self.queue.pop_front();
             } else {
                 break;
