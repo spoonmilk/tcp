@@ -131,8 +131,7 @@ impl SendBuf {
     /// Acknowledges (drops) all sent bytes up to the one indicated by most_recent_ack
     pub fn ack_data(&mut self, most_recent_ack: u32) {
         let expected_ack = self.num_acked + self.our_init_seq + 1;
-        if most_recent_ack < expected_ack {
-            // Old ack: it acknowledges no new data
+        if most_recent_ack < expected_ack { 
             return;
         }
     

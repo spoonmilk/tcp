@@ -33,7 +33,7 @@ CONSTANTS:
 
 // NOTE: These should be 1 millisecond and 60000 milliseconds for turn in
 // CONSTANTS
-const MIN_RTO: u64 = 1; // Milliseconds
+const MIN_RTO: u64 = 100; // Milliseconds
 pub const MAX_RTO: u64 = 60000; // Milliseconds
 const MAX_RETRANSMISSIONS: u32 = 3;
 
@@ -151,17 +151,15 @@ impl RetransmissionQueue {
             queue: VecDeque::new(),
         }
     }
-
     pub fn remove_acked_segments(&mut self, ack_num: u32) {
         while let Some(front) = self.queue.front() {
-            if front.seq_num < ack_num {
+            if front.seq_num < ack_num { 
                 self.queue.pop_front();
             } else {
                 break;
             }
         }
     }
-
     pub fn add_segment(&mut self, seq_num: u32, data: Vec<u8>, flags: u8, checksum: u16) {
         let segment = RetrSegment::new(seq_num, data, flags, checksum);
         // If this segment has a FIN, ensure it remains at the bottom of the queue

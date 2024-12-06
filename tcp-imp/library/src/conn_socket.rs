@@ -75,7 +75,7 @@ impl ConnectionSocket {
             let mut slf = slf.lock().unwrap();
             if let Some(seg) = {
                 let write_buf = Arc::clone(&slf.write_buf);
-                let mut writer = write_buf.get_buf();
+                let mut writer = write_buf.get_buf(); 
                 writer.retr_queue.get_next_timeout(current_rto)
             } {
                 {
@@ -154,6 +154,7 @@ impl ConnectionSocket {
             //Deal with receiving first sequence number of TCP partner
             self.set_init_ack(tpack.header.sequence_number);
             //Send response (SYN + ACK in this case) and change state
+            self.ack_rt(tpack.header.acknowledgment_number);
             self.send_flags(SYN | ACK);
             return TcpState::SynRecvd;
         }
@@ -191,6 +192,7 @@ impl ConnectionSocket {
                     .get_buf()
                     .set_final_seq(tpack.header.sequence_number); //Allows receive to know when receiving is no longer allowed
                 self.read_buf.alert_ready(); //Allows any receiving thread to unblock itself and terminate
+                self.ack_rt(tpack.header.acknowledgment_number);
                 self.send_flags(ACK);
                 return TcpState::CloseWait;
             }
@@ -202,6 +204,7 @@ impl ConnectionSocket {
         TcpState::Established
     }
     fn fin_wait_1_handler(&mut self, tpack: TcpPacket) -> TcpState {
+        self.ack_rt(tpack.header.acknowledgment_number);
         // Still accepts both acks for data sent and incoming data
         // Transitions to FinWait2 upon reception of an ACK for its FIN
         match header_flags(&tpack.header) {
@@ -222,8 +225,8 @@ impl ConnectionSocket {
             }
             FINACK => {
                 // Handle simultaneous close case - acknowledge their FIN
-                self.ack_num += 1;
-                self.send_flags(ACK);
+                self.ack_num += 1; 
+                self.send_flags(ACK); 
                 if tpack.header.acknowledgment_number == self.seq_num {
                     return TcpState::TimeWait;
                 }
@@ -239,6 +242,7 @@ impl ConnectionSocket {
         }
     }
     fn fin_wait_2_handler(&mut self, tpack: TcpPacket, slf_clone: Arc<Mutex<Self>>) -> TcpState {
+        self.ack_rt(tpack.header.acknowledgment_number);
         match header_flags(&tpack.header) {
             ACK if tpack.payload.len() == 0 => {
                 // Handle pure ACKs
@@ -277,7 +281,10 @@ impl ConnectionSocket {
         //Still accepts acks for its own data, but doesn't expect any incoming data
         //Transitions to Closed after 2 * MAX RTO passes - timer started in fin_wait_2_handler
         match header_flags(&tpack.header) {
-            ACK if tpack.payload.len() == 0 => self.ack(tpack),
+            ACK if tpack.payload.is_empty() => {
+                self.ack_rt(tpack.header.acknowledgment_number);
+                self.ack(tpack);
+            }
             ACK => eprintln!("TIME_WAIT: I shouldn't get a packet with data from my TCP partner"),
             _ => eprintln!(
                 "TIME_WAIT: I shouldn't get packet with flags: {}",
@@ -290,7 +297,10 @@ impl ConnectionSocket {
         //Still accepts acks for its own data, but doesn't expect any incoming data
         //Transitions to LastAck only when application runs close(), so no transitioning happening here
         match header_flags(&tpack.header) {
-            ACK if tpack.payload.len() == 0 => self.ack(tpack),
+            ACK if tpack.payload.is_empty() => {
+                self.ack_rt(tpack.header.acknowledgment_number);
+                self.ack(tpack);
+            }
             ACK => eprintln!("CLOSE_WAIT: I shouldn't get a packet with data from my TCP partner"),
             _ => eprintln!(
                 "CLOSE_WAIT: I shouldn't get packet with flags: {}",
@@ -304,10 +314,11 @@ impl ConnectionSocket {
         //Transitions to Closed when ack for FIN previously sent is received
         match header_flags(&tpack.header) {
             ACK if tpack.payload.len() == 0 => {
+                self.ack_rt(tpack.header.acknowledgment_number);
                 if tpack.header.acknowledgment_number == self.seq_num {
                     self.enter_closed();
                     return TcpState::Closed;
-                } else {
+                } else { 
                     self.ack(tpack);
                 }
             }
@@ -348,21 +359,19 @@ impl ConnectionSocket {
             let send_buf = self.write_buf.get_buf();
             send_buf.rem_window
         };
-    
         // If ACK moves forward
         if ack_num > self.last_ack_num {
             self.last_ack_num = ack_num;
             self.dup_ack_count = 0;
-    
             {
                 let mut send_buf = self.write_buf.get_buf();
+                // Remove acknowledged segments before processing the ACK
                 send_buf.retr_queue.remove_acked_segments(ack_num);
                 send_buf.ack_data(ack_num);
-            }
-    
+            } 
             self.ack_rt(ack_num);
         } else if ack_num == self.last_ack_num {
-            // Check if this packet is just a window update:
+            // Check if this packet is just a window update
             if new_window > old_window {
                 // Pure window update – do not treat as dup ACK
                 {
@@ -372,11 +381,11 @@ impl ConnectionSocket {
                 // Reset dup_ack_count because this isn't a "true" duplicate ack
                 self.dup_ack_count = 0;
             } else {
-                // True duplicate ACK scenario: no new data, no window increase
+                // True duplicate ACK scenario
                 self.dup_ack_count += 1;
-    
+                
                 if self.dup_ack_count == 3 {
-                    // Trigger fast retransmit
+                    // Fast retransmit
                     if let Some(seg) = {
                         let send_buf = self.write_buf.get_buf();
                         send_buf.retr_queue.queue.front().cloned()
@@ -388,7 +397,6 @@ impl ConnectionSocket {
             }
         }
     }
-    
     fn enter_closed(&self) {
         self.closed_sender.send(self.sid).unwrap();
     }
@@ -425,6 +433,7 @@ impl ConnectionSocket {
             retr_timer.update_rto(measured_rtt);
             retr_timer.reset();
         }
+        retr_queue.remove_acked_segments(ack_num);
     }
 
     // TODO: CLEAN UP HORRIBLE UGLY ADDING TO RETRANSMISSION QUEUE
@@ -432,30 +441,23 @@ impl ConnectionSocket {
     //BUILDING AND SENDING PACKETS
     //
     fn send_flags(&mut self, flags: u8) {
-        let increment_seq = (flags & SYN) != 0 || (flags & FIN) != 0;
-    
+        // Build and send the packet first
         let result = self.build_and_send(Vec::new(), flags);
         if let Err(e) = result {
             eprintln!("Error sending flags packet: {}", e);
             return;
         }
-    
-        // Only increment the sequence number if this is the *original* send of the SYN/FIN
-        // If you already have a FIN or SYN in the retransmission queue, you know it's not the first time
-        let is_original = {
-            let write_buf = self.write_buf.get_buf();
-            if (flags & FIN) != 0 {
-                // If there's already a FIN in the queue, don't increment again
-                write_buf.retr_queue.queue.iter().filter(|seg| seg.flags & FIN != 0).count() == 0
-            } else if (flags & SYN) != 0 {
-                // Similarly for SYN, if you handle it as well
-                write_buf.retr_queue.queue.iter().filter(|seg| seg.flags & SYN != 0).count() == 0
-            } else {
-                false
-            }
-        };
-    
-        if increment_seq && is_original {
+
+        let packet = result.unwrap();
+
+        // Add to retransmission queue if it's a SYN or FIN
+        if (flags & (SYN | FIN)) != 0 {
+            self.add_to_queue(
+                packet.header.sequence_number,
+                packet.payload,
+                flags,
+                packet.header.checksum
+            );
             self.seq_num += 1;
         }
     }
