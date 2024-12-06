@@ -22,6 +22,8 @@ pub struct ConnectionSocket {
     read_buf: Arc<SyncBuf<RecvBuf>>,
     write_buf: Arc<SyncBuf<SendBuf>>,
     retr_timer: Arc<Mutex<RetransmissionTimer>>,
+    last_ack_num: u32,
+    dup_ack_count: u32,
     // retr_queue: Arc<Mutex<RetransmissionQueue>>,
 }
 
@@ -50,6 +52,8 @@ impl ConnectionSocket {
             write_buf: Arc::new(SyncBuf::new(SendBuf::new(seq_num, stop_probing_sender))),
             retr_timer: Arc::new(Mutex::new(RetransmissionTimer::new())),
             // retr_queue: Arc::new(Mutex::new(RetransmissionQueue::new())),
+            dup_ack_count: 0,
+            last_ack_num: 0,
         }
     }
     ///Returns input socket's sid
@@ -340,22 +344,38 @@ impl ConnectionSocket {
     fn ack(&mut self, tpack: TcpPacket) {
         let ack_num = tpack.header.acknowledgment_number;
 
-        // Handle fast retransmit possibility first
-        if let Some(seg) = {
-            let mut send_buf = self.write_buf.get_buf();
-            send_buf.retr_queue.remove_acked_segments(ack_num)
-        } {
-            println!("Fast retransmit for seq={}", seg.seq_num);
-            self.send_segment(seg.seq_num, seg.payload.clone(), seg.flags, seg.checksum);
-            return;
-        }
+        if ack_num > self.last_ack_num {
+            // This is a new ACK that advances the acknowledgment number.
+            self.last_ack_num = ack_num;
+            self.dup_ack_count = 0;
 
-        // Normal ACK processing
-        {
-            let mut send_buf = self.write_buf.get_buf();
-            send_buf.ack_data(ack_num);
+            {
+                let mut send_buf = self.write_buf.get_buf();
+                // Remove fully acknowledged segments
+                send_buf.retr_queue.remove_acked_segments(ack_num);
+                // Normal ACK data handling
+                send_buf.ack_data(ack_num);
+            }
+
+            // Now update RTO and timers after handling ACKed segments
+            self.ack_rt(ack_num);
+        } else if ack_num == self.last_ack_num {
+            // This is a duplicate ACK - ack_num hasn't advanced.
+            self.dup_ack_count += 1;
+
+            if self.dup_ack_count == 3 {
+                // Trigger fast retransmit of the first unacked segment
+                let seg_to_retx = {
+                    let send_buf = self.write_buf.get_buf();
+                    send_buf.retr_queue.queue.front().cloned()
+                };
+
+                if let Some(seg) = seg_to_retx {
+                    println!("Fast retransmit for seq={}", seg.seq_num);
+                    self.send_segment(seg.seq_num, seg.payload.clone(), seg.flags, seg.checksum);
+                }
+            }
         }
-        self.ack_rt(ack_num);
     }
     fn enter_closed(&self) {
         self.closed_sender.send(self.sid).unwrap();
@@ -393,7 +413,6 @@ impl ConnectionSocket {
             retr_timer.update_rto(measured_rtt);
             retr_timer.reset();
         }
-        retr_queue.remove_acked_segments(ack_num);
     }
 
     // TODO: CLEAN UP HORRIBLE UGLY ADDING TO RETRANSMISSION QUEUE

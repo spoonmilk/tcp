@@ -142,45 +142,112 @@ impl RetrSegment {
 #[derive(Debug)]
 pub struct RetransmissionQueue {
     pub queue: VecDeque<RetrSegment>,
-    dup_ack_count: u32,
-    last_ack: u32,
 }
+
+// impl RetransmissionQueue {
+//     pub fn new() -> RetransmissionQueue {
+//         RetransmissionQueue {
+//             queue: VecDeque::new(),
+//         }
+//     }
+//     pub fn remove_acked_segments(&mut self, ack_num: u32) -> Option<RetrSegment> {
+//         // Check for duplicate ACKs
+//         if ack_num == self.last_ack {
+//             self.dup_ack_count += 1;
+//             // Only consider fast retransmit on exactly the third duplicate ACK
+//             if self.dup_ack_count == 3 {
+//                 if let Some(front) = self.queue.front() {
+//                     if front.seq_num == ack_num {
+//                         return Some(front.clone());
+//                     }
+//                 }
+//             }
+//         } else {
+//             // New ACK resets duplicate count
+//             self.dup_ack_count = 0;
+//             self.last_ack = ack_num;
+//             // Remove acknowledged segments
+//             while let Some(front) = self.queue.front() {
+//                 if front.seq_num < ack_num {
+//                     self.queue.pop_front();
+//                 } else {
+//                     break;
+//                 }
+//             }
+//         }
+//         None
+//     }
+//     pub fn get_next_timeout(&mut self, current_rto: Duration) -> Option<RetrSegment> {
+//         if let Some(front) = self.queue.front_mut() {
+//             if front.timed_out(current_rto) {
+//                 if front.retransmission_count >= MAX_RETRANSMISSIONS {
+//                     println!("Dropping segment seq={}", front.seq_num);
+//                     self.queue.pop_front();
+//                     return None;
+//                 }
+//                 front.retransmission_count += 1;
+//                 front.update_time_of_send();
+//                 return Some(front.clone());
+//             }
+//         }
+//         None
+//     }
+//     /// Adds a retransmission segment to the queue
+//     pub fn add_segment(&mut self, seq_num: u32, data: Vec<u8>, flags: u8, checksum: u16) {
+//         let segment = RetrSegment::new(seq_num, data, flags, checksum);
+//         self.queue.push_back(segment);
+//     }
+//     pub fn mark_sent(&mut self, seq_num: u32) {
+//         if let Some(segment) = self.queue.iter_mut().find(|s| s.seq_num == seq_num) {
+//             segment.time_of_send = Instant::now();
+//         }
+//     }
+//     pub fn calculate_rtt(&self, ack_num: u32) -> Option<Duration> {
+//         self.queue
+//             .front()
+//             .filter(|s| s.seq_num < ack_num && s.retransmission_count == 0)
+//             .map(|s| Instant::now().duration_since(s.time_of_send))
+//     }
+//     pub fn is_empty(&self) -> bool {
+//         self.queue.is_empty()
+//     }
+// }
 
 impl RetransmissionQueue {
     pub fn new() -> RetransmissionQueue {
         RetransmissionQueue {
             queue: VecDeque::new(),
-            last_ack: 0,
-            dup_ack_count: 0,
         }
     }
-    pub fn remove_acked_segments(&mut self, ack_num: u32) -> Option<RetrSegment> {
-        // Check for duplicate ACKs
-        if ack_num == self.last_ack {
-            self.dup_ack_count += 1;
-            // Only consider fast retransmit on exactly the third duplicate ACK
-            if self.dup_ack_count == 3 {
-                if let Some(front) = self.queue.front() {
-                    if front.seq_num == ack_num {
-                        return Some(front.clone());
-                    }
-                }
-            }
-        } else {
-            // New ACK resets duplicate count
-            self.dup_ack_count = 0;
-            self.last_ack = ack_num;
-            // Remove acknowledged segments
-            while let Some(front) = self.queue.front() {
-                if front.seq_num < ack_num {
-                    self.queue.pop_front();
-                } else {
-                    break;
-                }
+
+    // Now this function simply removes acknowledged segments and doesn't handle duplicates
+    pub fn remove_acked_segments(&mut self, ack_num: u32) {
+        while let Some(front) = self.queue.front() {
+            if front.seq_num < ack_num {
+                self.queue.pop_front();
+            } else {
+                break;
             }
         }
-        None
     }
+
+    pub fn add_segment(&mut self, seq_num: u32, data: Vec<u8>, flags: u8, checksum: u16) {
+        let segment = RetrSegment::new(seq_num, data, flags, checksum);
+        self.queue.push_back(segment);
+    }
+
+    // RTT calculation remains unchanged
+    pub fn calculate_rtt(&self, ack_num: u32) -> Option<Duration> {
+        self.queue
+            .front()
+            .filter(|s| s.seq_num < ack_num && s.retransmission_count == 0)
+            .map(|s| Instant::now().duration_since(s.time_of_send))
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.queue.is_empty()
+    }
+
     pub fn get_next_timeout(&mut self, current_rto: Duration) -> Option<RetrSegment> {
         if let Some(front) = self.queue.front_mut() {
             if front.timed_out(current_rto) {
@@ -195,51 +262,5 @@ impl RetransmissionQueue {
             }
         }
         None
-    }
-    /// Adds a retransmission segment to the queue
-    pub fn add_segment(&mut self, seq_num: u32, data: Vec<u8>, flags: u8, checksum: u16) {
-        let segment = RetrSegment::new(seq_num, data, flags, checksum);
-        self.queue.push_back(segment);
-    }
-    pub fn mark_sent(&mut self, seq_num: u32) {
-        if let Some(segment) = self.queue.iter_mut().find(|s| s.seq_num == seq_num) {
-            segment.time_of_send = Instant::now();
-        }
-    }
-    // pub fn get_timed_out_segments(&mut self, current_rto: Duration) -> Vec<RetrSegment> {
-    //     let mut timed_out_segments = Vec::new();
-    //     // Use retain_mut to iterate and modify the queue
-    //     self.queue.retain_mut(|segment| {
-    //         if segment.timed_out(current_rto) {
-    //             segment.retransmission_count += 1;
-
-    //             if segment.retransmission_count >= MAX_RETRANSMISSIONS {
-    //                 // Drop the segment
-    //                 println!(
-    //                     "Dropping segment seq_num={} after {} retransmissions",
-    //                     segment.seq_num, segment.retransmission_count
-    //                 );
-    //                 // Return false to remove the segment from the queue
-    //                 false
-    //             } else {
-    //                 // Update time_of_send for retransmission
-    //                 segment.update_time_of_send();
-    //                 timed_out_segments.push(segment.clone());
-    //                 true // Keep the segment in the queue
-    //             }
-    //         } else {
-    //             true // Keep the segment if not timed out
-    //         }
-    //     });
-    //     timed_out_segments
-    // }
-    pub fn calculate_rtt(&self, ack_num: u32) -> Option<Duration> {
-        self.queue
-            .front()
-            .filter(|s| s.seq_num < ack_num && s.retransmission_count == 0)
-            .map(|s| Instant::now().duration_since(s.time_of_send))
-    }
-    pub fn is_empty(&self) -> bool {
-        self.queue.is_empty()
     }
 }
