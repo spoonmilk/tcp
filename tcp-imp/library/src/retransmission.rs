@@ -1,5 +1,6 @@
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
+use crate::tcp_utils::FIN;
 
 /* Algorithm for calculatating RTO and successive:
 
@@ -144,75 +145,6 @@ pub struct RetransmissionQueue {
     pub queue: VecDeque<RetrSegment>,
 }
 
-// impl RetransmissionQueue {
-//     pub fn new() -> RetransmissionQueue {
-//         RetransmissionQueue {
-//             queue: VecDeque::new(),
-//         }
-//     }
-//     pub fn remove_acked_segments(&mut self, ack_num: u32) -> Option<RetrSegment> {
-//         // Check for duplicate ACKs
-//         if ack_num == self.last_ack {
-//             self.dup_ack_count += 1;
-//             // Only consider fast retransmit on exactly the third duplicate ACK
-//             if self.dup_ack_count == 3 {
-//                 if let Some(front) = self.queue.front() {
-//                     if front.seq_num == ack_num {
-//                         return Some(front.clone());
-//                     }
-//                 }
-//             }
-//         } else {
-//             // New ACK resets duplicate count
-//             self.dup_ack_count = 0;
-//             self.last_ack = ack_num;
-//             // Remove acknowledged segments
-//             while let Some(front) = self.queue.front() {
-//                 if front.seq_num < ack_num {
-//                     self.queue.pop_front();
-//                 } else {
-//                     break;
-//                 }
-//             }
-//         }
-//         None
-//     }
-//     pub fn get_next_timeout(&mut self, current_rto: Duration) -> Option<RetrSegment> {
-//         if let Some(front) = self.queue.front_mut() {
-//             if front.timed_out(current_rto) {
-//                 if front.retransmission_count >= MAX_RETRANSMISSIONS {
-//                     println!("Dropping segment seq={}", front.seq_num);
-//                     self.queue.pop_front();
-//                     return None;
-//                 }
-//                 front.retransmission_count += 1;
-//                 front.update_time_of_send();
-//                 return Some(front.clone());
-//             }
-//         }
-//         None
-//     }
-//     /// Adds a retransmission segment to the queue
-//     pub fn add_segment(&mut self, seq_num: u32, data: Vec<u8>, flags: u8, checksum: u16) {
-//         let segment = RetrSegment::new(seq_num, data, flags, checksum);
-//         self.queue.push_back(segment);
-//     }
-//     pub fn mark_sent(&mut self, seq_num: u32) {
-//         if let Some(segment) = self.queue.iter_mut().find(|s| s.seq_num == seq_num) {
-//             segment.time_of_send = Instant::now();
-//         }
-//     }
-//     pub fn calculate_rtt(&self, ack_num: u32) -> Option<Duration> {
-//         self.queue
-//             .front()
-//             .filter(|s| s.seq_num < ack_num && s.retransmission_count == 0)
-//             .map(|s| Instant::now().duration_since(s.time_of_send))
-//     }
-//     pub fn is_empty(&self) -> bool {
-//         self.queue.is_empty()
-//     }
-// }
-
 impl RetransmissionQueue {
     pub fn new() -> RetransmissionQueue {
         RetransmissionQueue {
@@ -233,8 +165,19 @@ impl RetransmissionQueue {
 
     pub fn add_segment(&mut self, seq_num: u32, data: Vec<u8>, flags: u8, checksum: u16) {
         let segment = RetrSegment::new(seq_num, data, flags, checksum);
-        self.queue.push_back(segment);
+        // If this segment has a FIN, ensure it remains at the bottom of the queue
+        if (flags & FIN) != 0 {
+            // Remove any previously queued FIN segment, as only one FIN should be at the bottom
+            if let Some(pos) = self.queue.iter().position(|seg| (seg.flags & FIN) != 0) {
+                self.queue.remove(pos);
+            }
+            // Now add this FIN segment to the back of the queue
+            self.queue.push_back(segment);
+        } else {
+            self.queue.push_back(segment);
+        }
     }
+    
 
     // RTT calculation remains unchanged
     pub fn calculate_rtt(&self, ack_num: u32) -> Option<Duration> {

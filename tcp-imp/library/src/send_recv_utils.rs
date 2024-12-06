@@ -42,7 +42,7 @@ pub struct SendBuf {
     //una: usize, Don't need, b/c una will always be 0 technically
     pub nxt: usize, // Pointer to next byte to be sent ; NOTE, UPDATE AS BYTES DRAINED
     //lbw: usize Don't need b/c lbw will always be circ_buffer.len() technically
-    rem_window: u16,
+    pub rem_window: u16,
     num_acked: u32,
     our_init_seq: u32,
     pub probing: bool, //Identifies whether or not we are currently probing - a little kludgy
@@ -84,24 +84,34 @@ impl SendBuf {
     ///Returns a vector of data to be put in the next TcpPacket to send, taking into account the input window size of the receiver
     ///This vector contains as many bytes as possible up to the maximum payload size (1500)
     pub fn next_data(&mut self) -> NextData {
-        let nxt_data = if self.rem_window == 0 {
-            //Zero window probing
+        if self.rem_window == 0 {
+            // Zero window probing
             self.probing = true;
-            let data = self.see_amount(1); 
-            data
+            let data = if self.circ_buffer.len() > self.nxt {
+                // Normal case: resend one byte from the buffer to probe
+                self.see_amount(1)
+            } else if self.circ_buffer.len() > 0 {
+                // If nxt points beyond len, but there is data, adjust nxt if needed:
+                let available = self.circ_buffer.len() - self.nxt;
+                self.see_amount(std::cmp::min(1, available))
+            } else {
+                // No data at all, insert a dummy byte for probing
+                return NextData::NoData;
+            };
+            return NextData::ZeroWindow(data);
         } else {
-            //Normal data for next packet
-            let greatest_constraint = cmp::min(self.rem_window as usize, MAX_MSG_SIZE);
-            let data = self.take_amount(greatest_constraint); 
+            // Normal data
+            let greatest_constraint = std::cmp::min(self.rem_window as usize, MAX_MSG_SIZE);
+            let data = self.take_amount(greatest_constraint);
             self.rem_window -= data.len() as u16;
-            data
-        };
-        match nxt_data.is_empty() {
-            true => NextData::NoData,
-            false if self.probing => NextData::ZeroWindow(nxt_data),
-            false => NextData::Data(nxt_data),
+            if data.is_empty() {
+                NextData::NoData
+            } else {
+                NextData::Data(data)
+            }
         }
     }
+    
     ///Only used privately; same as see_amount but increments the nxt pointer
     fn take_amount(&mut self, amount: usize) -> Vec<u8> {
         let data = self.see_amount(amount);
@@ -118,25 +128,50 @@ impl SendBuf {
             .collect()
     }
     ///Acknowledges (drops) all sent bytes up to the one indicated by most_recent_ack
+    /// Acknowledges (drops) all sent bytes up to the one indicated by most_recent_ack
     pub fn ack_data(&mut self, most_recent_ack: u32) {
-        // Caclulate relative acknowledged data
         let expected_ack = self.num_acked + self.our_init_seq + 1;
-        if most_recent_ack < expected_ack { return; } //Old packet
-        let mut relative_ack = most_recent_ack - expected_ack;
-        //Check for and handle transition from probing
-        if self.probing && relative_ack > self.nxt as u32 { //Probe packet received
-            self.probing = false;
-            self.nxt += 1;
-            self.stop_probing_sender.send(()).unwrap();  
-        } else if relative_ack as usize == self.nxt + 1 { //Our FIN is being acked - kinda kludgy
-            relative_ack -= 1
+        if most_recent_ack < expected_ack {
+            // Old ack: it acknowledges no new data
+            return;
         }
-        // Decrement nxt pointer to match dropped data ; compensation for absence of una
-        self.nxt -= relative_ack as usize;
-        // Drain out acknowledged data
-        self.circ_buffer.drain(..relative_ack as usize);
-        self.num_acked += relative_ack;
+    
+        let mut relative_ack = most_recent_ack - expected_ack;
+        let acked_bytes = relative_ack as usize;
+    
+        // If we were probing and the ACK covers beyond nxt, it means our probe byte got acknowledged.
+        if self.probing && acked_bytes > self.nxt {
+            self.probing = false;
+            // The probe byte is considered sent from nxt, so increment nxt by one 
+            // since that byte is now acknowledged.
+            let _ = self.stop_probing_sender.send(()); // Ignore if fails
+            // Adjust relative_ack since that one byte was a probe
+        }
+    
+        // Handle FIN acknowledgment if needed
+        // (If you have a FIN at nxt+1, and it's acked, decrement relative_ack by 1.)
+        if acked_bytes == self.nxt + 1 {
+            relative_ack -= 1;
+        }
+    
+        let acked_data = relative_ack as usize;
+        let available_data = self.circ_buffer.len();
+        let actual_acked = std::cmp::min(acked_data, available_data);
+    
+        // Never let nxt go negative
+        if actual_acked >= self.nxt {
+            // All currently "in-flight" data plus possibly the probe is acked
+            self.nxt = 0;
+        } else {
+            self.nxt -= actual_acked;
+        }
+    
+        // Drain out the acknowledged data
+        // This removes the acknowledged bytes from the front of circ_buffer
+        self.circ_buffer.drain(..actual_acked);
+        self.num_acked += actual_acked as u32;
     }
+
     ///Updates the SendBuf's internal tracker of how many more bytes can be sent before filling the reciever's window
     pub fn update_window(&mut self, new_window: u16) {
         self.rem_window = new_window;

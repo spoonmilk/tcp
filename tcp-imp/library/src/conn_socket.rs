@@ -181,7 +181,7 @@ impl ConnectionSocket {
     }
     fn established_handle(&mut self, tpack: TcpPacket) -> TcpState {
         match header_flags(&tpack.header) {
-            ACK if tpack.payload.len() == 0 => self.ack(tpack),
+            ACK if tpack.payload.is_empty() => self.ack(tpack),
             ACK => self.absorb_and_acknowledge(tpack),
             FINACK => {
                 //Other dude wants to close the connection
@@ -343,40 +343,52 @@ impl ConnectionSocket {
     ///Handles dropping all data associated with sequence numbers less than the ack number of the packet we just received and syncing this with retransmissions
     fn ack(&mut self, tpack: TcpPacket) {
         let ack_num = tpack.header.acknowledgment_number;
-
+        let new_window = tpack.header.window_size;
+        let old_window = {
+            let send_buf = self.write_buf.get_buf();
+            send_buf.rem_window
+        };
+    
+        // If ACK moves forward
         if ack_num > self.last_ack_num {
-            // This is a new ACK that advances the acknowledgment number.
             self.last_ack_num = ack_num;
             self.dup_ack_count = 0;
-
+    
             {
                 let mut send_buf = self.write_buf.get_buf();
-                // Remove fully acknowledged segments
                 send_buf.retr_queue.remove_acked_segments(ack_num);
-                // Normal ACK data handling
                 send_buf.ack_data(ack_num);
             }
-
-            // Now update RTO and timers after handling ACKed segments
+    
             self.ack_rt(ack_num);
         } else if ack_num == self.last_ack_num {
-            // This is a duplicate ACK - ack_num hasn't advanced.
-            self.dup_ack_count += 1;
-
-            if self.dup_ack_count == 3 {
-                // Trigger fast retransmit of the first unacked segment
-                let seg_to_retx = {
-                    let send_buf = self.write_buf.get_buf();
-                    send_buf.retr_queue.queue.front().cloned()
-                };
-
-                if let Some(seg) = seg_to_retx {
-                    println!("Fast retransmit for seq={}", seg.seq_num);
-                    self.send_segment(seg.seq_num, seg.payload.clone(), seg.flags, seg.checksum);
+            // Check if this packet is just a window update:
+            if new_window > old_window {
+                // Pure window update – do not treat as dup ACK
+                {
+                    let mut send_buf = self.write_buf.get_buf();
+                    send_buf.update_window(new_window);
+                }
+                // Reset dup_ack_count because this isn't a "true" duplicate ack
+                self.dup_ack_count = 0;
+            } else {
+                // True duplicate ACK scenario: no new data, no window increase
+                self.dup_ack_count += 1;
+    
+                if self.dup_ack_count == 3 {
+                    // Trigger fast retransmit
+                    if let Some(seg) = {
+                        let send_buf = self.write_buf.get_buf();
+                        send_buf.retr_queue.queue.front().cloned()
+                    } {
+                        println!("Fast retransmit for seq={}", seg.seq_num);
+                        self.send_segment(seg.seq_num, seg.payload.clone(), seg.flags, seg.checksum);
+                    }
                 }
             }
         }
     }
+    
     fn enter_closed(&self) {
         self.closed_sender.send(self.sid).unwrap();
     }
@@ -420,13 +432,30 @@ impl ConnectionSocket {
     //BUILDING AND SENDING PACKETS
     //
     fn send_flags(&mut self, flags: u8) {
-        match self.build_and_send(Vec::new(), flags) {
-            Ok(_) => {
-                ();
-            }
-            Err(e) => eprintln!("Error sending flags packet to partner: {}", e),
+        let increment_seq = (flags & SYN) != 0 || (flags & FIN) != 0;
+    
+        let result = self.build_and_send(Vec::new(), flags);
+        if let Err(e) = result {
+            eprintln!("Error sending flags packet: {}", e);
+            return;
         }
-        if (flags & SYN) != 0 || (flags & FIN) != 0 {
+    
+        // Only increment the sequence number if this is the *original* send of the SYN/FIN
+        // If you already have a FIN or SYN in the retransmission queue, you know it's not the first time
+        let is_original = {
+            let write_buf = self.write_buf.get_buf();
+            if (flags & FIN) != 0 {
+                // If there's already a FIN in the queue, don't increment again
+                write_buf.retr_queue.queue.iter().filter(|seg| seg.flags & FIN != 0).count() == 0
+            } else if (flags & SYN) != 0 {
+                // Similarly for SYN, if you handle it as well
+                write_buf.retr_queue.queue.iter().filter(|seg| seg.flags & SYN != 0).count() == 0
+            } else {
+                false
+            }
+        };
+    
+        if increment_seq && is_original {
             self.seq_num += 1;
         }
     }
@@ -434,15 +463,16 @@ impl ConnectionSocket {
         let data_length = data.len();
         match self.build_and_send(data, ACK) {
             Ok(packet) => {
+                // Only increment seq_num after the original data send
                 self.add_to_queue(
-                    packet.header.sequence_number.clone(),
+                    packet.header.sequence_number,
                     packet.payload.clone(),
                     ACK,
                     packet.header.checksum,
                 );
                 self.seq_num += data_length as u32;
             }
-            Err(e) => eprintln!("Error sending data packet to partner: {}", e),
+            Err(e) => eprintln!("Error sending data packet: {}", e),
         }
     }
     fn send_probe(&mut self, data: Vec<u8>) {
@@ -630,11 +660,23 @@ impl ConnectionSocket {
         loop {
             thread::sleep(Duration::from_millis(ZWP_TIMEOUT));
             if done_probing.load(Ordering::SeqCst) {
-                return;
-            } //Stop probing
+                return; // stop probing
+            }
             let mut slf = slf.lock().unwrap();
-            slf.send_probe(probe_data.clone());
-            drop(slf);
+            
+            // Before sending another probe, check if the remote window is still zero
+            let current_window = {
+                let write_buf = slf.write_buf.get_buf();
+                write_buf.rem_window
+            };
+            
+            if current_window == 0 {
+                slf.send_probe(probe_data.clone());
+            } else {
+                // Window opened, stop probing
+                done_probing.store(true, Ordering::SeqCst);
+                return;
+            }
         }
     }
     fn send_allowed(slf: Arc<Mutex<Self>>) -> bool {
