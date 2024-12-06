@@ -14,7 +14,7 @@ build_debug:
 	cp $(ROOT_DIR)/tcp-imp/target/debug/vnode $(VROUTER_OUT)
 
 build:
-	cargo build --manifest-path $(ROOT_DIR)/ip-imp/Cargo.toml --release
+	cargo build --manifest-path $(ROOT_DIR)/tcp-imp/Cargo.toml --release
 	cp $(ROOT_DIR)/tcp-imp/target/release/vnode $(VHOST_OUT)
 	cp $(ROOT_DIR)/tcp-imp/target/release/vnode $(VROUTER_OUT)		
 

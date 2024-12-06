@@ -156,10 +156,8 @@ impl HostRepl {
         // Call connect and establish a connection on the inputted ip and port
         let sid = backend.connect(ip_addr, port);
         //Let the sending begin!
-        let mut total_bytes_sent: u32 = 0; 
-        let mut iter_cnt = 0;
-        loop {
-            iter_cnt += 1;
+        let mut total_bytes_sent: u32 = 0;  
+        loop { 
             let bytes_read = file.read(&mut buf).unwrap();
             if bytes_read == 0 { break; } //We have reached EOF
             total_bytes_sent += match backend.tcp_send(sid, buf[..bytes_read].to_vec()) {
