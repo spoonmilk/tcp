@@ -60,6 +60,15 @@ this different way of doing things was more trouble than it was worth.
 
 #### Retransmission Buffers
 
+Our retransmission buffers use a fairly simple queue structure,
+using the builtin VecDeque data structure from the standard library.
+Additionally, we have a self-defined structure of retransmission segments
+that store essentially the data of a built packet so that we don't have
+to deal with checksum weirdness when retransmitting. 
+
+We also have a retransmissiontimer struct, which interacts with the time_wait
+thread and ack logic in the queue for resets and rtt calculations.
+
 ### High level thread logic overview
 Unlike our implementation of interfaces and the IP layer from the IP part of
 the project, our connection sockets do not have a thread or a collection of
@@ -87,15 +96,26 @@ thread to sending probe packets. In the case of receive(), the thread
 responsible for reception waits on a condition variable (alerted by the packet
 reception thread when packets are received) which lets it know that data is
 available in the receive buffer. And in the case of close() the created thread
-waits for all sending to complete before finishing execution. Separately, a
-thread is created to handle retransmissions on a timer driven basis... I
-think... [PlZ HELP ALEX]. The final piece of the puzzle is a constantly running
+waits for all sending to complete before finishing execution.
+For retransmission, we spawn a thread running the time_wait() function,
+which waits for the calculated rto period before waking up and checking for 
+segments to be retransmitted.
+The final piece of the puzzle is a constantly running
 thread external to the connection sockets that waits on a channel for messages
 that a given connection socket is entering the CLOSED state; upon receiving a
 message on this channel, the thread deletes the socket table entry for said
-connection socket before waiting on this channel again. 
+connection socket before waiting on this channel again.
 
 ### Oh, what we wish we could have done
+
+We would have liked to implement a version using async/await functions, which
+actually could have remedied some of our issues potentially, but we found
+dealing with the complexities of async Rust a bit too demanding for this project.
+
+We also went through an extremely intense period of refactoring, which was
+mostly due to incompatibilities with the spec for TCP on our IP layer.
+Given how much time we lost on these, it would have been nice to have done
+more refactoring earlier.
 
 ### Known bugs/issues
 As of the writing of this README, we have only recognized one bug in our
@@ -116,9 +136,21 @@ immediately pass up packets when it receives them. We decided to stop our
 debugging process there because of time constraints and a desire not to have to
 go back and deal with faulty IP code.
 
+On consequence of the duplicate acks/window updates is mislabeled spurious retransmissions.
+Because some window updates are being transmitted that are actually dup acks (and vice versa), 
+we have extremely frequent fast retransmission triggers which are then caught by
+wireshark as spurious despite technically being correct.
+
 ## Performance Measurement and Capture
 
 ### Measuring Performance
+
+Our performance measurement capture is in the effiency-capture file. While
+we don't run as fast as the reference, we believe a lot of this is due to the 
+sending of excessive duplicate ACKs which increases packet overhead and inefficiency
+in our IP layer, which was shown to be much slower than reference during our IP grading meeting. 
+We've also included a capture of the reference sending a 1MB file, titled
+reference-comparison, in which you can observe these differences.
 
 ### Packet capture annotations
 We've included a packet capture in our directory under the title "normal-test-capture."
@@ -127,5 +159,6 @@ This includes all the things we've noted.
 #### Annotated requirements
 
 - Our three-way handshake happens on frames 1, 2, and 3 of our packet capture, executing successfully before data begins sending. 
-- In frame 15, we see a segment sent with seq=8281, which is acknowledged in frame 19 by h2.
-- 
+- In frame 17, we see a segment sent with seq=11041, which is acknowledged in frame 21 by h2.
+- In frame 1223, you can see a normal fast retransmission after duplicate ACKs.
+- In frames 1530-1543, we see the normal closing sequence. Hooray!

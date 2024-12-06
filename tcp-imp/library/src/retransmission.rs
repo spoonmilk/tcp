@@ -1,6 +1,6 @@
+use crate::tcp_utils::FIN;
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
-use crate::tcp_utils::FIN;
 
 /* Algorithm for calculatating RTO and successive:
 
@@ -33,7 +33,7 @@ CONSTANTS:
 
 // NOTE: These should be 1 millisecond and 60000 milliseconds for turn in
 // CONSTANTS
-const MIN_RTO: u64 = 10; // Milliseconds
+const MIN_RTO: u64 = 1; // Milliseconds
 pub const MAX_RTO: u64 = 60000; // Milliseconds
 const MAX_RETRANSMISSIONS: u32 = 3;
 
@@ -152,7 +152,6 @@ impl RetransmissionQueue {
         }
     }
 
-    // Now this function simply removes acknowledged segments and doesn't handle duplicates
     pub fn remove_acked_segments(&mut self, ack_num: u32) {
         while let Some(front) = self.queue.front() {
             if front.seq_num < ack_num {
@@ -177,7 +176,6 @@ impl RetransmissionQueue {
             self.queue.push_back(segment);
         }
     }
-    
 
     // RTT calculation remains unchanged
     pub fn calculate_rtt(&self, ack_num: u32) -> Option<Duration> {
