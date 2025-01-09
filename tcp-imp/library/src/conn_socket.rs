@@ -75,8 +75,8 @@ impl ConnectionSocket {
             let mut slf = slf.lock().unwrap();
             if let Some(seg) = {
                 let write_buf = Arc::clone(&slf.write_buf);
-                let mut writer = write_buf.get_buf(); 
-                writer.retr_queue.get_next_timeout(current_rto)
+                let mut writer = write_buf.get_buf();
+                write.retr_queue.get_next_timeout(current_rto)
             } {
                 {
                     let mut retr_timer = slf.retr_timer.lock().unwrap();
@@ -225,8 +225,8 @@ impl ConnectionSocket {
             }
             FINACK => {
                 // Handle simultaneous close case - acknowledge their FIN
-                self.ack_num += 1; 
-                self.send_flags(ACK); 
+                self.ack_num += 1;
+                self.send_flags(ACK);
                 if tpack.header.acknowledgment_number == self.seq_num {
                     return TcpState::TimeWait;
                 }
@@ -318,7 +318,7 @@ impl ConnectionSocket {
                 if tpack.header.acknowledgment_number == self.seq_num {
                     self.enter_closed();
                     return TcpState::Closed;
-                } else { 
+                } else {
                     self.ack(tpack);
                 }
             }
@@ -368,7 +368,7 @@ impl ConnectionSocket {
                 // Remove acknowledged segments before processing the ACK
                 send_buf.retr_queue.remove_acked_segments(ack_num);
                 send_buf.ack_data(ack_num);
-            } 
+            }
             self.ack_rt(ack_num);
         } else if ack_num == self.last_ack_num {
             // Check if this packet is just a window update
@@ -383,7 +383,7 @@ impl ConnectionSocket {
             } else {
                 // True duplicate ACK scenario
                 self.dup_ack_count += 1;
-                
+
                 if self.dup_ack_count == 3 {
                     // Fast retransmit
                     if let Some(seg) = {
@@ -391,7 +391,12 @@ impl ConnectionSocket {
                         send_buf.retr_queue.queue.front().cloned()
                     } {
                         println!("Fast retransmit for seq={}", seg.seq_num);
-                        self.send_segment(seg.seq_num, seg.payload.clone(), seg.flags, seg.checksum);
+                        self.send_segment(
+                            seg.seq_num,
+                            seg.payload.clone(),
+                            seg.flags,
+                            seg.checksum,
+                        );
                     }
                 }
             }
@@ -455,7 +460,7 @@ impl ConnectionSocket {
                 packet.header.sequence_number,
                 packet.payload,
                 flags,
-                packet.header.checksum
+                packet.header.checksum,
             );
             self.seq_num += 1;
         }
@@ -664,13 +669,13 @@ impl ConnectionSocket {
                 return; // stop probing
             }
             let mut slf = slf.lock().unwrap();
-            
+
             // Before sending another probe, check if the remote window is still zero
             let current_window = {
                 let write_buf = slf.write_buf.get_buf();
                 write_buf.rem_window
             };
-            
+
             if current_window == 0 {
                 slf.send_probe(probe_data.clone());
             } else {
