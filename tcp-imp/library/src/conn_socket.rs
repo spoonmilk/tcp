@@ -76,7 +76,7 @@ impl ConnectionSocket {
             if let Some(seg) = {
                 let write_buf = Arc::clone(&slf.write_buf);
                 let mut writer = write_buf.get_buf();
-                write.retr_queue.get_next_timeout(current_rto)
+                writer.retr_queue.get_next_timeout(current_rto)
             } {
                 {
                     let mut retr_timer = slf.retr_timer.lock().unwrap();
