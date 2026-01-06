@@ -2,11 +2,11 @@ use crate::prelude::*;
 
 #[derive(Debug, Clone)]
 pub enum TcpState {
-    Listening, // Listener Socket constant state
+    Listening,   // Listener Socket constant state
     AwaitingRun, // Connection sockets upon creation, waiting to run
     Initialized, //Connection socket initialized by listener before processing SYN packet
-    SynSent, // Connection Socket after SYN, waiting for SYN/ACK
-    SynRecvd, // Connection Socket state after receiving a SYN, should respond SYN/ACK
+    SynSent,     // Connection Socket after SYN, waiting for SYN/ACK
+    SynRecvd,    // Connection Socket state after receiving a SYN, should respond SYN/ACK
     Established, //TCP handshake complete - now both parties can send data
     // Teardown things
     FinWait1,
@@ -14,15 +14,14 @@ pub enum TcpState {
     TimeWait,
     CloseWait,
     LastAck,
-    Closed
+    Closed,
 }
 
 #[derive(Debug, Clone)]
 pub struct TcpAddress {
     pub ip: Ipv4Addr,
-    pub port: u16
+    pub port: u16,
 }
-
 
 impl TcpAddress {
     pub fn new(ip: Ipv4Addr, port: u16) -> TcpAddress {
@@ -30,21 +29,16 @@ impl TcpAddress {
     }
 }
 
-
-
 /// A TCP Packet with a TCP header and a payload ; Encapsulated in IP upon send
 #[derive(Debug, Clone)]
 pub struct TcpPacket {
     pub header: TcpHeader,
-    pub payload: Vec<u8>
+    pub payload: Vec<u8>,
 }
 
 impl TcpPacket {
     pub fn new(header: TcpHeader, payload: Vec<u8>) -> Self {
-        Self {
-            header,
-            payload
-        }
+        Self { header, payload }
     }
 }
 
@@ -56,14 +50,13 @@ pub fn serialize_tcp(packet: TcpPacket) -> Vec<u8> {
     buffer
 }
 
-
 /// Deserializes a TCP Packet from a Vec<u8> containing a WHOLE IP packet ; do not pass in payloads
 pub fn deserialize_tcp(raw_packet: Vec<u8>) -> Result<TcpPacket> {
     match TcpHeader::from_slice(&raw_packet) {
         Ok((header, payload)) => {
             return Ok(TcpPacket {
                 header,
-                payload: payload.to_vec()
+                payload: payload.to_vec(),
             });
         }
         Err(_) => {
@@ -75,7 +68,7 @@ pub fn deserialize_tcp(raw_packet: Vec<u8>) -> Result<TcpPacket> {
     }
 }
 
-// TCP FLAGS    
+// TCP FLAGS
 pub const URG: u8 = 1;
 pub const ACK: u8 = 2;
 pub const PSH: u8 = 4;
@@ -87,8 +80,11 @@ pub const FINACK: u8 = FIN | ACK;
 
 /// Takes a TCP header and returns the flags as a u8
 pub fn header_flags(head: &TcpHeader) -> u8 {
-    let bools = [false, false, head.fin, head.syn, head.rst, head.psh, head.ack, head.urg];
-    bools.iter()
+    let bools = [
+        false, false, head.fin, head.syn, head.rst, head.psh, head.ack, head.urg,
+    ];
+    bools
+        .iter()
         .enumerate()
         .fold(0, |acc, (i, &b)| acc | ((b as u8) << (7 - i)))
 }
@@ -109,7 +105,7 @@ pub fn has_flags(head: &TcpHeader, flags: u8) -> bool {
 /// Horrible terrible function to determine if a packet is SYN and ONLY SYN
 pub fn is_syn(head: &TcpHeader) -> bool {
     if head.ns | head.fin | head.rst | head.psh | head.ack | head.urg | head.ece | head.cwr {
-        return false
+        return false;
     } else if head.syn {
         true
     } else {
@@ -119,7 +115,7 @@ pub fn is_syn(head: &TcpHeader) -> bool {
 
 /*
 /// Commands to the socket manager ; not the sockets themselves
-pub enum SockMand { 
+pub enum SockMand {
     Listen(u16), // Creates a listener socket on <port>
     Accept(u16), // Puts an existing listener socket on <port> in accepting state
     Connect(Ipv4Addr, u16) // Creates a connection socket to <ip> on <port>

@@ -3,7 +3,7 @@ use crate::prelude::*;
 pub type ForwardingTable = HashMap<Ipv4Net, Route>;
 pub type InterfaceTable = HashMap<String, InterfaceRep>; //Is shared via Arc<RwLock<>>
 pub type InterfaceRecvers = HashMap<String, Receiver<Packet>>; //NEVER shared - only IPDaemon has this
-pub type RipNeighbors = HashMap<Ipv4Addr, Vec<Route>>; 
+pub type RipNeighbors = HashMap<Ipv4Addr, Vec<Route>>;
 //type SocketTable = ...?
 
 //Used as values of the forwarding table hashmap held by nodes
@@ -113,8 +113,8 @@ pub enum InterfaceStatus {
 //Used for messages that a node sends to an interface
 #[derive(Debug)]
 pub enum InterCmd {
-    Send(Packet, Ipv4Addr),                 //Send this packet - when a packet is being forwarded
-    ToggleStatus,                           //Make status down if up or up if down
+    Send(Packet, Ipv4Addr), //Send this packet - when a packet is being forwarded
+    ToggleStatus,           //Make status down if up or up if down
 }
 
 //Used to store the data an interface needs to build a packet and send it
@@ -124,5 +124,3 @@ pub struct PacketBasis {
     pub prot_num: u8,
     pub msg: Vec<u8>,
 }
-
-

@@ -78,7 +78,7 @@ impl SendBuf {
             .drain(..std::cmp::min(available_spc, filler.len()))
             .collect::<Vec<u8>>();
 
-        self.circ_buffer.extend_from_slice(&to_add[..]); 
+        self.circ_buffer.extend_from_slice(&to_add[..]);
         filler
     }
     ///Returns a vector of data to be put in the next TcpPacket to send, taking into account the input window size of the receiver
@@ -111,7 +111,7 @@ impl SendBuf {
             }
         }
     }
-    
+
     ///Only used privately; same as see_amount but increments the nxt pointer
     fn take_amount(&mut self, amount: usize) -> Vec<u8> {
         let data = self.see_amount(amount);
@@ -119,7 +119,8 @@ impl SendBuf {
         data
     }
     ///Only used privately; clones up to (as much as possible) the specified amount out of the circular buffer (after the nxt pointer)
-    pub fn see_amount(&self, amount: usize) -> Vec<u8> { //ONLY PUB FOR DEBUGGING
+    pub fn see_amount(&self, amount: usize) -> Vec<u8> {
+        //ONLY PUB FOR DEBUGGING
         let greatest_constraint = cmp::min(amount, self.circ_buffer.len() - self.nxt);
         let upper_bound = self.nxt + greatest_constraint;
         self.circ_buffer
@@ -131,32 +132,32 @@ impl SendBuf {
     /// Acknowledges (drops) all sent bytes up to the one indicated by most_recent_ack
     pub fn ack_data(&mut self, most_recent_ack: u32) {
         let expected_ack = self.num_acked + self.our_init_seq + 1;
-        if most_recent_ack < expected_ack { 
+        if most_recent_ack < expected_ack {
             return;
         }
-    
+
         let mut relative_ack = most_recent_ack - expected_ack;
         let acked_bytes = relative_ack as usize;
-    
+
         // If we were probing and the ACK covers beyond nxt, it means our probe byte got acknowledged.
         if self.probing && acked_bytes > self.nxt {
             self.probing = false;
-            // The probe byte is considered sent from nxt, so increment nxt by one 
+            // The probe byte is considered sent from nxt, so increment nxt by one
             // since that byte is now acknowledged.
             let _ = self.stop_probing_sender.send(()); // Ignore if fails
-            // Adjust relative_ack since that one byte was a probe
+                                                       // Adjust relative_ack since that one byte was a probe
         }
-    
+
         // Handle FIN acknowledgment if needed
         // (If you have a FIN at nxt+1, and it's acked, decrement relative_ack by 1.)
         if acked_bytes == self.nxt + 1 {
             relative_ack -= 1;
         }
-    
+
         let acked_data = relative_ack as usize;
         let available_data = self.circ_buffer.len();
         let actual_acked = std::cmp::min(acked_data, available_data);
-    
+
         // Never let nxt go negative
         if actual_acked >= self.nxt {
             // All currently "in-flight" data plus possibly the probe is acked
@@ -164,7 +165,7 @@ impl SendBuf {
         } else {
             self.nxt -= actual_acked;
         }
-    
+
         // Drain out the acknowledged data
         // This removes the acknowledged bytes from the front of circ_buffer
         self.circ_buffer.drain(..actual_acked);
@@ -199,13 +200,17 @@ pub struct RecvBuf {
     early_arrivals: PayloadMap,
     bytes_read: u32,
     rem_init_seq: u32,
-    final_seq: Option<u32>
+    final_seq: Option<u32>,
 }
 
 impl TcpBuffer for RecvBuf {
     //Ready when buffer has some elements
     fn ready(&self) -> bool {
-        let received_fin = if let Some(_) = self.final_seq { true } else { false };
+        let received_fin = if let Some(_) = self.final_seq {
+            true
+        } else {
+            false
+        };
         self.circ_buffer.len() != 0 || received_fin
     }
 }
@@ -217,7 +222,7 @@ impl RecvBuf {
             early_arrivals: PayloadMap::new(),
             bytes_read: 0,
             rem_init_seq: 0, //We don't know yet *shrug* - gets set once and then is never edited
-            final_seq: None
+            final_seq: None,
         }
     }
 
@@ -250,8 +255,10 @@ impl RecvBuf {
             }
             cmp::Ordering::Less => {} //Drop packet, contains stale data
             cmp::Ordering::Greater => {
-                if data.len() <= self.window() as usize { self.early_arrivals.insert(seq_num, data) }
-                else {} //Drop packet, we don't have space
+                if data.len() <= self.window() as usize {
+                    self.early_arrivals.insert(seq_num, data)
+                } else {
+                } //Drop packet, we don't have space
             } //Early arrival, add it to early arrival hashmap
         }
         self.expected_seq()
@@ -268,7 +275,7 @@ impl RecvBuf {
     pub fn can_receive(&self) -> bool {
         match self.final_seq {
             Some(fin_seq_num) => self.expected_seq() < fin_seq_num || self.circ_buffer.len() != 0, //Can receive if there are still packets out there OR if we still have stuff in our buffer
-            None => true
+            None => true,
         }
     }
 

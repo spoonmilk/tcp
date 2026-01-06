@@ -29,7 +29,7 @@ The virtual network is full of dark and arcane magiks, beware...
 1. Run ```util/vnet_run --router ./reference/vrouter --host ./vhost linear-r1h2```
 2. Profit! See the below list for commands : )
 
-> For those recruiters who may be prowling my github:\
+> For those recruiters who may be prowling my github:
 > We use the reference router because the TCP implementation is all host-focused!
 > I do have a router implementation of my own, though.
 > It should work fine (maybe, sorta)

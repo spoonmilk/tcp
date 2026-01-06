@@ -127,28 +127,34 @@ pub fn route_update(
     next_hop: &Ipv4Addr,
 ) -> Option<Ipv4Net> {
     let rip_net =
-        Ipv4Net::with_netmask(Ipv4Addr::from(rip_rt.address), Ipv4Addr::from(rip_rt.mask))
-            .unwrap();
+        Ipv4Net::with_netmask(Ipv4Addr::from(rip_rt.address), Ipv4Addr::from(rip_rt.mask)).unwrap();
     rip_rt.cost = rip_rt.cost + 1;
     match get_route(&rip_net, &fwd_table) {
-        Some(prev_route) if prev_route.next_hop == ForwardingOption::ToSelf => panic!("Route to self should not be encountered in update"),
+        Some(prev_route) if prev_route.next_hop == ForwardingOption::ToSelf => {
+            panic!("Route to self should not be encountered in update")
+        }
         Some(prev_route) => {
             match prev_route.cost {
                 Some(cost) => {
-                    if cost > rip_rt.cost || prev_route.next_hop == ForwardingOption::Ip(Ipv4Addr::from(rip_rt.address)) {
+                    if cost > rip_rt.cost
+                        || prev_route.next_hop
+                            == ForwardingOption::Ip(Ipv4Addr::from(rip_rt.address))
+                    {
                         // If lower cost OR network topology has changed, change next hop
                         fwd_table.insert(rip_net, rip_to_route(rip_rt, next_hop));
                         Some(rip_net)
-                    } else { None } //NOTHING IS ADDED
+                    } else {
+                        None
+                    } //NOTHING IS ADDED
                 }
                 None => panic!("Route cost should not be None"), // Route is to self, do nothing
             }
         }
-        None => { 
+        None => {
             // If not contained in our table, add it
             fwd_table.insert(rip_net, rip_to_route(rip_rt, next_hop));
             Some(rip_net)
-         }
+        }
     }
 }
 

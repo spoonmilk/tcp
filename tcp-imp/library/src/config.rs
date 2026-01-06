@@ -1,14 +1,14 @@
 use crate::interface::*;
-use crate::ip_daemons::{RouterIpDaemon, HostIpDaemon};
+use crate::ip_daemons::{HostIpDaemon, RouterIpDaemon};
 use crate::prelude::*;
 use crate::utils::*;
 //use crate::tcp_utils::*;
-use crate::backends::{ HostBackend, RouterBackend, Backend };
+use crate::backends::{Backend, HostBackend, RouterBackend};
 //use crate::socket_manager::SocketManager;
 
 fn init_interfaces(
     interfaces: Vec<InterfaceConfig>,
-    neighbors: Vec<NeighborConfig>
+    neighbors: Vec<NeighborConfig>,
 ) -> (InterfaceTable, InterfaceRecvers) {
     let mut interface_reps = HashMap::new();
     let mut interface_recvers = HashMap::new();
@@ -29,7 +29,7 @@ fn init_interfaces(
         let new_interface = Interface::new(
             // inter_conf.assigned_ip.clone(),
             inter_neighbors,
-            inter_conf.udp_port
+            inter_conf.udp_port,
         );
         thread::spawn(move || new_interface.run(inter_chan));
         interface_reps.insert(
@@ -39,13 +39,10 @@ fn init_interfaces(
                 inter_conf.assigned_prefix, //.trunc(),
                 inter_conf.assigned_ip,
                 inter_rep_neighbors,
-                inter_rep_chan.send
-            )
+                inter_rep_chan.send,
+            ),
         );
-        interface_recvers.insert(
-            inter_conf.name,
-            inter_rep_chan.recv
-        );
+        interface_recvers.insert(inter_conf.name, inter_rep_chan.recv);
     }
     (interface_reps, interface_recvers)
 }
@@ -53,7 +50,8 @@ fn init_interfaces(
 // Handles initializing routers, returns to initialize
 pub fn initialize(config_info: IPConfig) -> Result<(Backend, Receiver<Packet>)> {
     // Create hashmap of interfaceReps (keys are names of interfaceReps)
-    let (interface_reps, interface_recvers) = init_interfaces(config_info.interfaces, config_info.neighbors);
+    let (interface_reps, interface_recvers) =
+        init_interfaces(config_info.interfaces, config_info.neighbors);
     //Create and configure forwarding table
     let mut forwarding_table = HashMap::new();
     add_static_routes(&mut forwarding_table, config_info.static_routes);
@@ -71,16 +69,23 @@ pub fn initialize(config_info: IPConfig) -> Result<(Backend, Receiver<Packet>)> 
     match config_info.routing_mode {
         RoutingType::Rip => {
             //Make router backend
-            let backend = RouterBackend::new(backend_interface_reps, backend_forwarding_table, ip_sender);
+            let backend =
+                RouterBackend::new(backend_interface_reps, backend_forwarding_table, ip_sender);
             //Create RIP neighbors table
             let mut rip_table = HashMap::new();
             let rip_neighbors = match config_info.rip_neighbors {
                 Some(rip_neighbors) => rip_neighbors,
-                None => Vec::new() //Empty rip neighbors list
+                None => Vec::new(), //Empty rip neighbors list
             };
             add_rip_neighbors(&mut rip_table, rip_neighbors);
             //Construct and run ipdaemon
-            let ipdaemon = RouterIpDaemon::new(ipdaemon_interface_reps, interface_recvers, ipdaemon_forwarding_table, rip_table, backend_sender);
+            let ipdaemon = RouterIpDaemon::new(
+                ipdaemon_interface_reps,
+                interface_recvers,
+                ipdaemon_forwarding_table,
+                rip_table,
+                backend_sender,
+            );
             thread::spawn(move || ipdaemon.run(backend_recver));
             //Return backend and its receiver
             Ok((Backend::Router(backend), ip_recver))
@@ -88,9 +93,19 @@ pub fn initialize(config_info: IPConfig) -> Result<(Backend, Receiver<Packet>)> 
         RoutingType::Static => {
             //Make host backend
             let socket_table = Arc::new(RwLock::new(HashMap::new()));
-            let backend = HostBackend::new(backend_interface_reps, backend_forwarding_table, socket_table , ip_sender);
+            let backend = HostBackend::new(
+                backend_interface_reps,
+                backend_forwarding_table,
+                socket_table,
+                ip_sender,
+            );
             //Construct and run ipdaemon
-            let ipdaemon = HostIpDaemon::new(ipdaemon_interface_reps, interface_recvers, ipdaemon_forwarding_table, backend_sender);
+            let ipdaemon = HostIpDaemon::new(
+                ipdaemon_interface_reps,
+                interface_recvers,
+                ipdaemon_forwarding_table,
+                backend_sender,
+            );
             thread::spawn(move || ipdaemon.run(backend_recver));
             //Return backend and its receiver
             Ok((Backend::Host(backend), ip_recver))
@@ -104,7 +119,7 @@ fn add_static_routes(fwd_table: &mut ForwardingTable, static_routes: Vec<StaticR
         let new_route = Route::new(
             RouteType::Static,
             None,
-            ForwardingOption::Ip(inter_addr.clone())
+            ForwardingOption::Ip(inter_addr.clone()),
         );
         fwd_table.insert(net_prefix.clone(), new_route);
     }
@@ -112,7 +127,7 @@ fn add_static_routes(fwd_table: &mut ForwardingTable, static_routes: Vec<StaticR
 
 fn add_rip_neighbors(
     rip_table: &mut HashMap<Ipv4Addr, Vec<Route>>,
-    rip_neighbors: Vec<Ipv4Addr>
+    rip_neighbors: Vec<Ipv4Addr>,
 ) -> () {
     for neighbor in rip_neighbors {
         rip_table.insert(neighbor, Vec::new());
@@ -125,7 +140,7 @@ fn add_local_routes(fwd_table: &mut ForwardingTable, interface_reps: &InterfaceT
         let new_route = Route::new(
             RouteType::Local,
             Some(0),
-            ForwardingOption::Inter(interface_rep.name.clone())
+            ForwardingOption::Inter(interface_rep.name.clone()),
         );
         fwd_table.insert(interface_rep.v_net.clone(), new_route);
     }

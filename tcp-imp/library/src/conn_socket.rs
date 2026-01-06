@@ -43,7 +43,7 @@ impl ConnectionSocket {
             src_addr,
             dst_addr,
             seq_num,
-            sid: 0, //We don't know on intialization - we'll only know once we get added to the socket table (and self.set_sid() is called)
+            sid: 0, //We don't know on initialization - we'll only know once we get added to the socket table (and self.set_sid() is called)
             closed_sender,
             ip_sender,
             stop_probing_recver: Arc::new(Mutex::new(stop_probing_recver)),
@@ -101,19 +101,20 @@ impl ConnectionSocket {
     pub fn handle_packet(slf: Arc<Mutex<Self>>, tpack: TcpPacket, ip_head: Ipv4Header) {
         let slf_clone = Arc::clone(&slf); //Needed for closing in fin_wait_2_handler
         let mut slf = slf.lock().unwrap();
+        let win_size = tpack.header.window_size;
         //Universal packet reception actions
         if has_flags(&tpack.header, RST) {
             panic!("Received RST packet");
         } //Panics if RST flag received
           //TODO: Get rid of clone, but I'm tired and lazy - will fix later - Alex
-        if !slf.check_tcp_checksum(tpack.clone(), ip_head) {
+        if !slf.check_tcp_checksum(tpack, ip_head) {
             eprintln!("Received packet with bad checksum, dropping.");
             return;
         }
         {
             //Update (remote) window size
             let mut write_buf = slf.write_buf.get_buf();
-            write_buf.update_window(tpack.header.window_size);
+            write_buf.update_window(win_size);
         }
         //State specific packet reception actions
         let new_state = {

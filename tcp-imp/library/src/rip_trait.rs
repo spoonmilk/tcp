@@ -32,7 +32,9 @@ pub trait RipDaemon: VnodeIpDaemon {
             if !to_remove.is_empty() {
                 slf.rip_broadcast();
                 to_remove.iter().for_each(|prf| {
-                    slf.forwarding_table_mut().remove(prf).expect("Something fishy");
+                    slf.forwarding_table_mut()
+                        .remove(prf)
+                        .expect("Something fishy");
                 });
             }
         }
@@ -47,7 +49,7 @@ pub trait RipDaemon: VnodeIpDaemon {
             self.rip_respond(addr, None);
         }
     }
-    ///Sends a RIP response to a given destination IP containing routes correlating to the input option of 
+    ///Sends a RIP response to a given destination IP containing routes correlating to the input option of
     ///a vector of Ipv4Nets - if None, send all routes
     fn rip_respond(&self, dst: Ipv4Addr, nets: Option<&Vec<Ipv4Net>>) -> () {
         let rip_resp_msg: RipMsg = self.table_to_rip(nets);
@@ -60,10 +62,20 @@ pub trait RipDaemon: VnodeIpDaemon {
         let table = match nets {
             Some(nets) => {
                 let mut ftable_subset = HashMap::new();
-                nets.iter().for_each(|net| { ftable_subset.insert(net, forwarding_table.get(net).expect("Internal Failure: net should def be in the fwding table")); });
+                nets.iter().for_each(|net| {
+                    ftable_subset.insert(
+                        net,
+                        forwarding_table
+                            .get(net)
+                            .expect("Internal Failure: net should def be in the fwding table"),
+                    );
+                });
                 ftable_subset
             }
-            None => forwarding_table.iter().map(|(key, val)| (key, val)).collect() //Weird ownership wizardry
+            None => forwarding_table
+                .iter()
+                .map(|(key, val)| (key, val))
+                .collect(), //Weird ownership wizardry
         };
         for (mask, route) in table {
             match route.rtype {
@@ -72,7 +84,7 @@ pub trait RipDaemon: VnodeIpDaemon {
                     let rip_route = RipRoute::new(
                         route.cost.clone().unwrap(),
                         mask.clone().addr().into(),
-                        mask.clone().netmask().into()
+                        mask.clone().netmask().into(),
                     );
                     rip_routes.push(rip_route);
                 }
@@ -108,8 +120,11 @@ pub trait RipDaemon: VnodeIpDaemon {
                 None => {}
             }
         }
-        if !updated.is_empty() { Some(updated) }
-        else { None }
+        if !updated.is_empty() {
+            Some(updated)
+        } else {
+            None
+        }
     }
     fn triggered_update(&self, changed_routes: Option<Vec<Ipv4Net>>) -> () {
         match changed_routes {
@@ -128,7 +143,11 @@ pub trait RipDaemon: VnodeIpDaemon {
     ///Packages a RIP message in an IP Packet
     fn package_rmsg(&self, rmsg: RipMsg, dst: Ipv4Addr) -> Packet {
         let ser_resp_rip: Vec<u8> = serialize_rip(rmsg);
-        let pb = PacketBasis { dst_ip: dst, prot_num: 200, msg: ser_resp_rip };
+        let pb = PacketBasis {
+            dst_ip: dst,
+            prot_num: 200,
+            msg: ser_resp_rip,
+        };
         self.build(pb)
     }
 }

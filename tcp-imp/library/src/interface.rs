@@ -6,20 +6,21 @@ pub struct Interface {
     // pub v_ip: Ipv4Addr,
     pub neighbors: HashMap<Ipv4Addr, u16>,
     pub status: Mutex<InterfaceStatus>, //Only non-static field - represents current status of the interface
-    pub udp_sock: UdpSocket
+    pub udp_sock: UdpSocket,
 }
 
 impl Interface {
     pub fn new(
         // v_ip: Ipv4Addr,
         neighbors: HashMap<Ipv4Addr, u16>,
-        udp_port: u16
+        udp_port: u16,
     ) -> Interface {
         Interface {
             // v_ip,
             neighbors,
             status: Mutex::new(InterfaceStatus::Up), //Status always starts as Up
-            udp_sock: UdpSocket::bind(format!("127.0.0.1:{}", udp_port)).expect("Unable to bind to port")
+            udp_sock: UdpSocket::bind(format!("127.0.0.1:{}", udp_port))
+                .expect("Unable to bind to port"),
         }
     }
     pub fn run(self, chan: BiChan<Packet, InterCmd>) -> () {
@@ -37,9 +38,13 @@ impl Interface {
             let received = receiver.recv();
             let status = slf.status.lock().unwrap();
             match received {
-                Ok(InterCmd::Send(pack, next_hop)) if matches!(*status, InterfaceStatus::Up) => slf.send(pack, next_hop).expect("Error sending packet"),
+                Ok(InterCmd::Send(pack, next_hop)) if matches!(*status, InterfaceStatus::Up) => {
+                    slf.send(pack, next_hop).expect("Error sending packet")
+                }
                 Ok(InterCmd::ToggleStatus) => Interface::toggle_status(&slf),
-                Ok(_) => { println!("I'm down - don't tell me to send crap!"); } //We're currently down, can't send stuff - sorry
+                Ok(_) => {
+                    println!("I'm down - don't tell me to send crap!");
+                } //We're currently down, can't send stuff - sorry
                 Err(e) => panic!("Error Receiving from almighty IPDaemon: {e:?}"),
             }
         }
@@ -53,7 +58,9 @@ impl Interface {
             };
             let status = slf.status.lock().unwrap();
             match *status {
-                InterfaceStatus::Up => sender.send(pack).expect("Channel to almighty IPDaemon disconnected"),
+                InterfaceStatus::Up => sender
+                    .send(pack)
+                    .expect("Channel to almighty IPDaemon disconnected"),
                 InterfaceStatus::Down => {}
             }
         }
@@ -68,12 +75,8 @@ impl Interface {
                 *status = InterfaceStatus::Up;
             }
         }
-    } 
-    fn send(
-        &self,
-        pack: Packet,
-        next_hop: Ipv4Addr,
-    ) -> std::io::Result<()> {
+    }
+    fn send(&self, pack: Packet, next_hop: Ipv4Addr) -> std::io::Result<()> {
         // Grab neighbor address to send to
         let dst_neighbor = self.neighbors.get(&next_hop).unwrap();
         let mut message = vec![0u8; 20];
