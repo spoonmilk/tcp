@@ -107,7 +107,7 @@ impl ConnectionSocket {
             panic!("Received RST packet");
         } //Panics if RST flag received
           //TODO: Get rid of clone, but I'm tired and lazy - will fix later - Alex
-        if !slf.check_tcp_checksum(tpack, ip_head) {
+        if !slf.check_tcp_checksum(tpack.clone(), ip_head) {
             eprintln!("Received packet with bad checksum, dropping.");
             return;
         }
