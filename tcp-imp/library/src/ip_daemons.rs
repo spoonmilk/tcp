@@ -14,23 +14,23 @@ pub struct HostIpDaemon {
 }
 
 impl VnodeIpDaemon for HostIpDaemon {
-    fn interface_reps(&self) -> RwLockReadGuard<InterfaceTable> {
+    fn interface_reps(&self) -> RwLockReadGuard<'_, InterfaceTable> {
         self.interface_reps.read().unwrap()
     }
     fn interface_recvers(&self) -> &InterfaceRecvers {
         &self.interface_recvers
     }
-    fn forwarding_table(&self) -> RwLockReadGuard<ForwardingTable> {
+    fn forwarding_table(&self) -> RwLockReadGuard<'_, ForwardingTable> {
         self.forwarding_table.read().unwrap()
     }
-    fn forwarding_table_mut(&self) -> RwLockWriteGuard<ForwardingTable> {
+    fn forwarding_table_mut(&self) -> RwLockWriteGuard<'_, ForwardingTable> {
         self.forwarding_table.write().unwrap()
     }
     fn backend_sender(&self) -> &Sender<Packet> {
         &self.backend_sender
     }
     // TODO: SHOULD TAKE OTHER PROTOCOLS
-    fn local_protocols(&self, protocol: IpNumber, pack: Packet) -> () {
+    fn local_protocols(&self, protocol: IpNumber, pack: Packet) {
         match protocol {
             IpNumber(6) => {
                 self.backend_sender.send(pack).expect("Channel fuckery");
@@ -56,7 +56,7 @@ impl HostIpDaemon {
         }
     }
     /// Runs the node and spawns interfaces
-    pub fn run(self, backend_recver: Receiver<PacketBasis>) -> () {
+    pub fn run(self, backend_recver: Receiver<PacketBasis>) {
         //ONGOING TASKS
         //Define mutex to protect self - although each tokio "thread" runs asynchronously instead of concurrently, mutexes are still needed (despite what I originally thought)
         let listen_mutex = Arc::new(Mutex::new(self));
@@ -77,23 +77,23 @@ pub struct RouterIpDaemon {
 }
 
 impl VnodeIpDaemon for RouterIpDaemon {
-    fn interface_reps(&self) -> RwLockReadGuard<InterfaceTable> {
+    fn interface_reps(&self) -> RwLockReadGuard<'_, InterfaceTable> {
         self.interface_reps.read().unwrap()
     }
     fn interface_recvers(&self) -> &InterfaceRecvers {
         &self.interface_recvers
     }
-    fn forwarding_table(&self) -> RwLockReadGuard<ForwardingTable> {
+    fn forwarding_table(&self) -> RwLockReadGuard<'_, ForwardingTable> {
         self.forwarding_table.read().unwrap()
     }
-    fn forwarding_table_mut(&self) -> RwLockWriteGuard<ForwardingTable> {
+    fn forwarding_table_mut(&self) -> RwLockWriteGuard<'_, ForwardingTable> {
         self.forwarding_table.write().unwrap()
     }
     fn backend_sender(&self) -> &Sender<Packet> {
         &self.backend_sender
     }
     /// Take in a packet destined for the current node and display information from it
-    fn local_protocols(&self, protocol: IpNumber, pack: Packet) -> () {
+    fn local_protocols(&self, protocol: IpNumber, pack: Packet) {
         match protocol {
             etherparse::IpNumber(200) => {
                 // Message received is a RIP packet
@@ -127,7 +127,7 @@ impl RouterIpDaemon {
         }
     }
     /// Runs the node and spawns interfaces
-    pub fn run(self, backend_recver: Receiver<PacketBasis>) -> () {
+    pub fn run(self, backend_recver: Receiver<PacketBasis>) {
         //STARTUP TASKS
         //Request RIP routes from neighboring RouterIpDaemons
         thread::sleep(Duration::from_millis(100)); //Make sure all RouterIpDaemons have been initialized before requesting
@@ -146,7 +146,7 @@ impl RouterIpDaemon {
         thread::spawn(move || RouterIpDaemon::backend_listen(backend_mutex, backend_recver));
         RouterIpDaemon::interface_listen(listen_mutex);
     }
-    fn process_rip_packet(&self, pack: Packet) -> () {
+    fn process_rip_packet(&self, pack: Packet) {
         let src_ip: Ipv4Addr = pack.header.source.into();
         // Message received is a RIP packet
         let rip_msg_vec: Vec<u8> = pack.data;

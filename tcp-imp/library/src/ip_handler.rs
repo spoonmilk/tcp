@@ -20,7 +20,7 @@ impl IpHandler {
             socket_manager,
         }
     }
-    pub fn run(self, ip_recver: Receiver<Packet>) -> () {
+    pub fn run(self, ip_recver: Receiver<Packet>) {
         loop {
             let pack = ip_recver.recv().expect("Error receiving from IP Daemon");
             match pack.header.protocol.0 {
@@ -43,7 +43,7 @@ impl IpHandler {
         pack: Packet,
         socket_table: Arc<RwLock<SocketTable>>,
         socket_manager: Arc<Mutex<SocketManager>>,
-    ) -> () {
+    ) {
         let tpack = deserialize_tcp(pack.data.clone()).expect("Malformed TCP packet");
         let socket_table = socket_table.read().unwrap();
         match Self::proper_socket(&pack.header, &tpack, &socket_table) {
@@ -60,7 +60,7 @@ impl IpHandler {
                     }
                     SocketEntry::Listener(ent) => {
                         //Blegh, ownership
-                        let port = ent.port.clone();
+                        let port = ent.port;
                         let sock_man = Arc::clone(&socket_manager);
                         thread::spawn(move || sock_man.lock().unwrap().handle_incoming(pack, port));
                     }
@@ -91,19 +91,19 @@ impl IpHandler {
                         && (ent.dst_addr.port == *src_port)
                         && (ent.src_addr.port == *dst_port)
                     {
-                        return Some(sock_id.clone());
+                        return Some(*sock_id);
                     }
                 }
                 SocketEntry::Listener(ent) => {
                     if (ent.port == *dst_port) && is_syn(&tcp_pack.header) {
-                        listener_id = Some(sock_id.clone())
+                        listener_id = Some(*sock_id)
                     }
                 }
             }
         }
         listener_id
     }
-    fn handle_test_packet(pack: Packet) -> () {
+    fn handle_test_packet(pack: Packet) {
         let src = Self::string_ip(pack.header.source);
         let dst = Self::string_ip(pack.header.destination);
         let ttl = pack.header.time_to_live;

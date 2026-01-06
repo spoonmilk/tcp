@@ -29,7 +29,7 @@ impl SocketManager {
         }
     }
     /// Initialize connection socket for incoming packet and either add it to pending connections for listener or add it to socket table
-    pub fn handle_incoming(&mut self, pack: Packet, port: u16) -> () {
+    pub fn handle_incoming(&mut self, pack: Packet, port: u16) {
         let head = pack.header;
         let body = pack.data;
 
@@ -53,11 +53,11 @@ impl SocketManager {
             let sock_listen_ent = ListenEntry::new(port);
             let listen_ent = SocketEntry::Listener(sock_listen_ent);
             socket_table.insert(sid, listen_ent);
-            return sid;
+            sid
         }
     }
     /// Opens a listener on <port> to accepting new connections
-    pub fn accept(&mut self, port: u16) -> () {
+    pub fn accept(&mut self, port: u16) {
         let listener_table = &mut self.listener_table;
         match listener_table.get_mut(&port) {
             Some(listener) => {
@@ -68,15 +68,15 @@ impl SocketManager {
                     pd_conn.start(&mut sock_table, sid);
                 });
             }
-            None => return, // Listener was closed in the before this function got c
-        };
+            None => (), // Listener was closed in the before this function got c
+        }
     }
     pub fn accept1(&mut self, port: u16) -> Option<Receiver<Arc<Mutex<ConnectionSocket>>>> {
         let listener_table = &mut self.listener_table;
         match listener_table.get_mut(&port) {
             Some(listener) => {
                 let (sock_send, sock_recv) = channel::<Arc<Mutex<ConnectionSocket>>>();
-                if listener.pending_connections.len() > 0 {
+                if !listener.pending_connections.is_empty() {
                     //Just take the first pending connection
                     let pd_conn = listener.pending_connections.remove(0);
                     let mut sock_table = self.socket_table.write().unwrap();
@@ -100,7 +100,7 @@ impl SocketManager {
     /// Listener sockets will default to a non-accepting state until accept is called.
     ///
     /// NOTE: The socket table is locked during this operation
-    fn listener_recv(&mut self, port: u16, ip_head: Ipv4Header, tcp_pack: TcpPacket) -> () {
+    fn listener_recv(&mut self, port: u16, ip_head: Ipv4Header, tcp_pack: TcpPacket) {
         //Check that the packet is a SYN packet and drop if it isn't
         if !has_only_flags(&tcp_pack.header, SYN) {
             return println!("Listener socket received non SYN packet for some reason");
@@ -149,7 +149,7 @@ impl SocketManager {
             false => listener.pending_connections.push(pending_conn),
         }
     }
-    pub fn listener_close(&mut self, listen_ent: ListenEntry) -> () {
+    pub fn listener_close(&mut self, listen_ent: ListenEntry) {
         let listen_port = listen_ent.port;
         self.listener_table.remove(&listen_port);
     }

@@ -114,27 +114,27 @@ pub fn initialize(config_info: IPConfig) -> Result<(Backend, Receiver<Packet>)> 
     }
 }
 
-fn add_static_routes(fwd_table: &mut ForwardingTable, static_routes: Vec<StaticRoute>) -> () {
+fn add_static_routes(fwd_table: &mut ForwardingTable, static_routes: Vec<StaticRoute>) {
     for (net_prefix, inter_addr) in static_routes {
         let new_route = Route::new(
             RouteType::Static,
             None,
-            ForwardingOption::Ip(inter_addr.clone()),
+            ForwardingOption::Ip(inter_addr),
         );
-        fwd_table.insert(net_prefix.clone(), new_route);
+        fwd_table.insert(net_prefix, new_route);
     }
 }
 
 fn add_rip_neighbors(
     rip_table: &mut HashMap<Ipv4Addr, Vec<Route>>,
     rip_neighbors: Vec<Ipv4Addr>,
-) -> () {
+) {
     for neighbor in rip_neighbors {
         rip_table.insert(neighbor, Vec::new());
     }
 }
 
-fn add_local_routes(fwd_table: &mut ForwardingTable, interface_reps: &InterfaceTable) -> () {
+fn add_local_routes(fwd_table: &mut ForwardingTable, interface_reps: &InterfaceTable) {
     let interface_reps = interface_reps.values();
     for interface_rep in interface_reps {
         let new_route = Route::new(
@@ -142,15 +142,15 @@ fn add_local_routes(fwd_table: &mut ForwardingTable, interface_reps: &InterfaceT
             Some(0),
             ForwardingOption::Inter(interface_rep.name.clone()),
         );
-        fwd_table.insert(interface_rep.v_net.clone(), new_route);
+        fwd_table.insert(interface_rep.v_net, new_route);
     }
 }
 
-fn add_toself_routes(fwd_table: &mut ForwardingTable, interface_reps: &InterfaceTable) -> () {
+fn add_toself_routes(fwd_table: &mut ForwardingTable, interface_reps: &InterfaceTable) {
     let interface_reps = interface_reps.values();
     for interface_rep in interface_reps {
         let new_route = Route::new(RouteType::ToSelf, None, ForwardingOption::ToSelf);
-        let self_addr = Ipv4Net::new((&interface_rep).v_ip, 32).unwrap();
+        let self_addr = Ipv4Net::new(interface_rep.v_ip, 32).unwrap();
         fwd_table.insert(self_addr, new_route);
     }
 }

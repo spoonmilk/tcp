@@ -24,13 +24,13 @@ pub struct HostBackend {
 }
 
 impl VnodeBackend for HostBackend {
-    fn interface_reps(&self) -> RwLockReadGuard<InterfaceTable> {
+    fn interface_reps(&self) -> RwLockReadGuard<'_, InterfaceTable> {
         self.interface_reps.read().unwrap()
     }
-    fn interface_reps_mut(&self) -> RwLockWriteGuard<InterfaceTable> {
+    fn interface_reps_mut(&self) -> RwLockWriteGuard<'_, InterfaceTable> {
         self.interface_reps.write().unwrap()
     }
-    fn forwarding_table(&self) -> RwLockReadGuard<ForwardingTable> {
+    fn forwarding_table(&self) -> RwLockReadGuard<'_, ForwardingTable> {
         self.forwarding_table.read().unwrap()
     }
     fn ip_sender(&self) -> &Sender<PacketBasis> {
@@ -53,8 +53,7 @@ impl HostBackend {
             .unwrap()
             .get("if0")
             .expect("Assumed that if0 would exist")
-            .v_ip
-            .clone(); //IDEALLY, THIS IS NOT DONE THIS WAY
+            .v_ip; //IDEALLY, THIS IS NOT DONE THIS WAY
         let ip_sender = Arc::new(ip_sender);
         let (closed_send, closed_recv) = channel::<SocketId>();
         let closed_sender = Arc::new(closed_send);
@@ -79,15 +78,15 @@ impl HostBackend {
             sid_assigner,
         }
     }
-    pub fn socket_table(&self) -> RwLockReadGuard<SocketTable> {
+    pub fn socket_table(&self) -> RwLockReadGuard<'_, SocketTable> {
         self.socket_table.read().unwrap()
     }
-    fn socket_table_mut(&self) -> RwLockWriteGuard<SocketTable> {
+    fn socket_table_mut(&self) -> RwLockWriteGuard<'_, SocketTable> {
         self.socket_table.write().unwrap()
     }
     fn sock_arc(&self, sid: &SocketId) -> Option<Arc<Mutex<ConnectionSocket>>> {
         let s_table = self.socket_table();
-        match s_table.get(&sid) {
+        match s_table.get(sid) {
             Some(SocketEntry::Connection(s_ent)) => Some(Arc::clone(&s_ent.sock)),
             Some(SocketEntry::Listener(_)) => None,
             None => None,
@@ -96,7 +95,7 @@ impl HostBackend {
     pub fn listen(&self, port: u16) -> SocketId {
         self.socket_manager.lock().unwrap().listen(port)
     }
-    pub fn accept(&self, port: u16) -> () {
+    pub fn accept(&self, port: u16) {
         self.socket_manager.lock().unwrap().accept(port);
     }
     pub fn accept1(&self, port: u16) -> Option<SocketId> {
@@ -195,7 +194,7 @@ impl HostBackend {
                 SocketEntry::Connection(ent)
                     if (ent.dst_addr.ip == *dst_ip) && (ent.dst_addr.port == *port) =>
                 {
-                    return Some(sid.clone());
+                    return Some(*sid);
                 }
                 SocketEntry::Connection(_) => {} //Not a matching socket
                 SocketEntry::Listener(_) => {}   //Don't care if it's a listener socket
@@ -279,13 +278,13 @@ pub struct RouterBackend {
 }
 
 impl VnodeBackend for RouterBackend {
-    fn interface_reps(&self) -> RwLockReadGuard<InterfaceTable> {
+    fn interface_reps(&self) -> RwLockReadGuard<'_, InterfaceTable> {
         self.interface_reps.read().unwrap()
     }
-    fn interface_reps_mut(&self) -> RwLockWriteGuard<InterfaceTable> {
+    fn interface_reps_mut(&self) -> RwLockWriteGuard<'_, InterfaceTable> {
         self.interface_reps.write().unwrap()
     }
-    fn forwarding_table(&self) -> RwLockReadGuard<ForwardingTable> {
+    fn forwarding_table(&self) -> RwLockReadGuard<'_, ForwardingTable> {
         self.forwarding_table.read().unwrap()
     }
     fn ip_sender(&self) -> &Sender<PacketBasis> {

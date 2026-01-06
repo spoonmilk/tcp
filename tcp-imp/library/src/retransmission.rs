@@ -46,6 +46,12 @@ pub struct RetransmissionTimer {
     max_rto: Duration,             // Maximum RTO: 100ms(?)
     pub retransmission_count: u32, // Attempt counter ; stop at 3
 }
+impl Default for RetransmissionTimer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RetransmissionTimer {
     pub fn new() -> RetransmissionTimer {
         RetransmissionTimer {
@@ -143,6 +149,12 @@ impl RetrSegment {
 #[derive(Debug)]
 pub struct RetransmissionQueue {
     pub queue: VecDeque<RetrSegment>,
+}
+
+impl Default for RetransmissionQueue {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl RetransmissionQueue {

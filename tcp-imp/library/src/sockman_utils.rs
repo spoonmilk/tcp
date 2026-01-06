@@ -9,6 +9,12 @@ pub type ListenerTable = HashMap<u16, ListenerEntry>;
 pub struct SidAssigner {
     next_sid: AtomicU16,
 }
+impl Default for SidAssigner {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SidAssigner {
     pub fn new() -> SidAssigner {
         SidAssigner {
@@ -57,6 +63,12 @@ pub struct ListenerEntry {
     pub pending_connections: Vec<PendingConn>,
     pub sock_send: Option<Sender<Arc<Mutex<ConnectionSocket>>>>, //This is so cursed wtf
 }
+impl Default for ListenerEntry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ListenerEntry {
     pub fn new() -> ListenerEntry {
         ListenerEntry {
@@ -83,8 +95,8 @@ impl PendingConn {
         sid: SocketId,
     ) -> Arc<Mutex<ConnectionSocket>> {
         //Create entry on socket table and add it
-        let src_addr = (&self.sock.src_addr).clone();
-        let dst_addr = (&self.sock.dst_addr).clone();
+        let src_addr = self.sock.src_addr.clone();
+        let dst_addr = self.sock.dst_addr.clone();
         let state = Arc::clone(&self.sock.state);
         // let sock = self.sock.run();
         let sock = Arc::new(Mutex::new(self.sock));

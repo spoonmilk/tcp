@@ -116,7 +116,7 @@ fn rip_to_route(rip_msg: &mut RipRoute, next_hop: &Ipv4Addr) -> Route {
     Route::new(
         RouteType::Rip,
         Some(rip_msg.cost),
-        ForwardingOption::Ip(next_hop.clone()), //Ipv4Addr::from(rip_msg.address))
+        ForwardingOption::Ip(*next_hop), //Ipv4Addr::from(rip_msg.address))
     )
 }
 
@@ -128,7 +128,7 @@ pub fn route_update(
 ) -> Option<Ipv4Net> {
     let rip_net =
         Ipv4Net::with_netmask(Ipv4Addr::from(rip_rt.address), Ipv4Addr::from(rip_rt.mask)).unwrap();
-    rip_rt.cost = rip_rt.cost + 1;
+    rip_rt.cost += 1;
     match get_route(&rip_net, &fwd_table) {
         Some(prev_route) if prev_route.next_hop == ForwardingOption::ToSelf => {
             panic!("Route to self should not be encountered in update")

@@ -20,14 +20,14 @@ impl<T: TcpBuffer> SyncBuf<T> {
     pub fn alert_ready(&self) {
         self.ready.notify_one();
     }
-    pub fn wait(&self) -> std::sync::MutexGuard<T> {
+    pub fn wait(&self) -> std::sync::MutexGuard<'_, T> {
         let mut buf = self.buf.lock().unwrap();
         while !buf.ready() {
             buf = self.ready.wait(buf).unwrap();
         }
         buf
     }
-    pub fn get_buf(&self) -> std::sync::MutexGuard<T> {
+    pub fn get_buf(&self) -> std::sync::MutexGuard<'_, T> {
         self.buf.lock().unwrap()
     }
 }
@@ -90,7 +90,7 @@ impl SendBuf {
             let data = if self.circ_buffer.len() > self.nxt {
                 // Normal case: resend one byte from the buffer to probe
                 self.see_amount(1)
-            } else if self.circ_buffer.len() > 0 {
+            } else if !self.circ_buffer.is_empty() {
                 // If nxt points beyond len, but there is data, adjust nxt if needed:
                 let available = self.circ_buffer.len() - self.nxt;
                 self.see_amount(std::cmp::min(1, available))
@@ -98,7 +98,7 @@ impl SendBuf {
                 // No data at all, insert a dummy byte for probing
                 return NextData::NoData;
             };
-            return NextData::ZeroWindow(data);
+            NextData::ZeroWindow(data)
         } else {
             // Normal data
             let greatest_constraint = std::cmp::min(self.rem_window as usize, MAX_MSG_SIZE);
@@ -182,7 +182,7 @@ impl SendBuf {
     //     timed_out_segments
     // }
     pub fn still_sending(&self) -> bool {
-        self.circ_buffer.len() == 0 && self.nxt == 0 && !self.probing && self.retr_queue.is_empty()
+        self.circ_buffer.is_empty() && self.nxt == 0 && !self.probing && self.retr_queue.is_empty()
     }
 }
 
@@ -206,12 +206,12 @@ pub struct RecvBuf {
 impl TcpBuffer for RecvBuf {
     //Ready when buffer has some elements
     fn ready(&self) -> bool {
-        let received_fin = if let Some(_) = self.final_seq {
+        let received_fin = if self.final_seq.is_some() {
             true
         } else {
             false
         };
-        self.circ_buffer.len() != 0 || received_fin
+        !self.circ_buffer.is_empty() || received_fin
     }
 }
 
@@ -229,7 +229,7 @@ impl RecvBuf {
     ///Returns a vector of in-order data drained from the circular buffer, containing a number of elements equal to the specified amount
     ///or to the total amount of in-order data ready to go in the buffer
     pub fn read(&mut self, bytes: u16) -> Vec<u8> {
-        let constraints = vec![bytes as usize, self.circ_buffer.len()];
+        let constraints = [bytes as usize, self.circ_buffer.len()];
         let greatest_constraint = constraints.iter().min().unwrap();
         let data: Vec<u8> = self.circ_buffer.drain(..greatest_constraint).collect();
         self.bytes_read += data.len() as u32;
@@ -257,8 +257,7 @@ impl RecvBuf {
             cmp::Ordering::Greater => {
                 if data.len() <= self.window() as usize {
                     self.early_arrivals.insert(seq_num, data)
-                } else {
-                } //Drop packet, we don't have space
+                }  //Drop packet, we don't have space
             } //Early arrival, add it to early arrival hashmap
         }
         self.expected_seq()
@@ -274,7 +273,7 @@ impl RecvBuf {
     ///Returns a boolean representing whether or not there is data the buffer still expects to receive
     pub fn can_receive(&self) -> bool {
         match self.final_seq {
-            Some(fin_seq_num) => self.expected_seq() < fin_seq_num || self.circ_buffer.len() != 0, //Can receive if there are still packets out there OR if we still have stuff in our buffer
+            Some(fin_seq_num) => self.expected_seq() < fin_seq_num || !self.circ_buffer.is_empty(), //Can receive if there are still packets out there OR if we still have stuff in our buffer
             None => true,
         }
     }

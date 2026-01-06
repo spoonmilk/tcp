@@ -209,7 +209,7 @@ impl ConnectionSocket {
         // Still accepts both acks for data sent and incoming data
         // Transitions to FinWait2 upon reception of an ACK for its FIN
         match header_flags(&tpack.header) {
-            ACK if tpack.payload.len() == 0 => {
+            ACK if tpack.payload.is_empty() => {
                 // First, handle the acknowledgment
                 self.ack(tpack.clone());
 
@@ -245,7 +245,7 @@ impl ConnectionSocket {
     fn fin_wait_2_handler(&mut self, tpack: TcpPacket, slf_clone: Arc<Mutex<Self>>) -> TcpState {
         self.ack_rt(tpack.header.acknowledgment_number);
         match header_flags(&tpack.header) {
-            ACK if tpack.payload.len() == 0 => {
+            ACK if tpack.payload.is_empty() => {
                 // Handle pure ACKs
                 self.ack(tpack);
                 TcpState::FinWait2
@@ -314,7 +314,7 @@ impl ConnectionSocket {
         //Still accepts acks for its own data, but doesn't expect any incoming data
         //Transitions to Closed when ack for FIN previously sent is received
         match header_flags(&tpack.header) {
-            ACK if tpack.payload.len() == 0 => {
+            ACK if tpack.payload.is_empty() => {
                 self.ack_rt(tpack.header.acknowledgment_number);
                 if tpack.header.acknowledgment_number == self.seq_num {
                     self.enter_closed();
@@ -420,7 +420,7 @@ impl ConnectionSocket {
     ///Sets up socket with knowledge of partner's sequence number
     fn set_init_ack(&mut self, rem_seq_num: u32) {
         //Set ack_num
-        self.ack_num = rem_seq_num.clone();
+        self.ack_num = rem_seq_num;
         self.ack_num += 1; //Increment to be next expected value of sequence number
                            //Set Recv Buffer's initial remote sequence number
         let mut read_buf = self.read_buf.get_buf();
@@ -522,13 +522,13 @@ impl ConnectionSocket {
             .calc_checksum_ipv4_raw(src_ip, dst_ip, payload.as_slice())
             .expect("Checksum calculation failed");
         tcp_header.checksum = checksum;
-        return TcpPacket {
+        TcpPacket {
             header: tcp_header,
             payload,
-        };
+        }
     }
     /// Takes in a TCP header and a u8 representing flags and sets the corresponding flags in the header.
-    fn set_flags(head: &mut TcpHeader, flags: u8) -> () {
+    fn set_flags(head: &mut TcpHeader, flags: u8) {
         if (flags & SYN) != 0 {
             head.syn = true;
         }
@@ -551,7 +551,7 @@ impl ConnectionSocket {
     /// Takes in a TCP packet and outputs a Packet Basis for its IP packet
     fn packet_basis(&self, tpack: TcpPacket) -> PacketBasis {
         PacketBasis {
-            dst_ip: self.dst_addr.ip.clone(),
+            dst_ip: self.dst_addr.ip,
             prot_num: 6,
             msg: serialize_tcp(tpack),
         }
@@ -606,7 +606,7 @@ impl ConnectionSocket {
         Ok(bytes_sent as u32)
     }
 
-    fn send_onwards(slf: Arc<Mutex<Self>>, snd_recver: Receiver<SendCmd>) -> () {
+    fn send_onwards(slf: Arc<Mutex<Self>>, snd_recver: Receiver<SendCmd>) {
         //Grab proper resources from slf before relinquishing its lock
         let (write_buf, stop_probing_recver) = {
             let slf = slf.lock().unwrap();
@@ -711,7 +711,7 @@ impl ConnectionSocket {
         };
         let mut recv_buf: std::sync::MutexGuard<'_, RecvBuf> = read_buf.wait();
         let received = recv_buf.read(bytes);
-        if received.len() == 0 {
+        if received.is_empty() {
             return Err(Error::new(
                 ErrorKind::Unsupported,
                 "Reception not allow; there's nothing left to receive",
@@ -751,7 +751,7 @@ impl ConnectionSocket {
                 let slf = slf.lock().unwrap();
                 let write_buf = slf.write_buf.get_buf();
                 // Check if all data has been sent and acknowledged
-                write_buf.circ_buffer.len() == 0
+                write_buf.circ_buffer.is_empty()
                     && write_buf.nxt == 0
                     && !write_buf.probing
                     && write_buf.retr_queue.is_empty()
@@ -785,7 +785,7 @@ impl ConnectionSocket {
 
     // Helper method to check if all data has been sent and acknowledged
     pub fn is_send_complete(write_buf: &SendBuf) -> bool {
-        write_buf.circ_buffer.len() == 0
+        write_buf.circ_buffer.is_empty()
             && write_buf.nxt == 0
             && !write_buf.probing
             && write_buf.retr_queue.is_empty()

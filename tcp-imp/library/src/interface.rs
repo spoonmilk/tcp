@@ -23,7 +23,7 @@ impl Interface {
                 .expect("Unable to bind to port"),
         }
     }
-    pub fn run(self, chan: BiChan<Packet, InterCmd>) -> () {
+    pub fn run(self, chan: BiChan<Packet, InterCmd>) {
         //Make arc of self and clone
         let slf_arc1 = Arc::new(self);
         let slf_arc2 = Arc::clone(&slf_arc1);
@@ -33,7 +33,7 @@ impl Interface {
         thread::spawn(move || Interface::node_listen(receiver, slf_arc1));
         Interface::ether_listen(sender, slf_arc2);
     }
-    fn node_listen(receiver: Receiver<InterCmd>, slf: Arc<Interface>) -> () {
+    fn node_listen(receiver: Receiver<InterCmd>, slf: Arc<Interface>) {
         loop {
             let received = receiver.recv();
             let status = slf.status.lock().unwrap();
@@ -49,7 +49,7 @@ impl Interface {
             }
         }
     }
-    fn ether_listen(sender: Sender<Packet>, slf: Arc<Interface>) -> () {
+    fn ether_listen(sender: Sender<Packet>, slf: Arc<Interface>) {
         loop {
             let pack = match slf.recv() {
                 Ok(pack) => pack,
@@ -65,7 +65,7 @@ impl Interface {
             }
         }
     }
-    fn toggle_status(slf_arc: &Arc<Interface>) -> () {
+    fn toggle_status(slf_arc: &Arc<Interface>) {
         let mut status = slf_arc.status.lock().unwrap();
         match *status {
             InterfaceStatus::Up => {
@@ -106,16 +106,16 @@ impl Interface {
             Ok((head, rest)) => {
                 let len = (head.total_len - 20) as usize;
                 let pay: Vec<u8> = Vec::from_iter(rest[0..len].iter().cloned());
-                return Ok(Packet {
+                Ok(Packet {
                     header: head,
                     data: pay,
-                });
+                })
             }
             Err(_) => {
-                return Err(Error::new(
+                Err(Error::new(
                     ErrorKind::InvalidData,
                     "Failed to read received packet error",
-                ));
+                ))
             }
         }
     }

@@ -54,16 +54,16 @@ pub fn serialize_tcp(packet: TcpPacket) -> Vec<u8> {
 pub fn deserialize_tcp(raw_packet: Vec<u8>) -> Result<TcpPacket> {
     match TcpHeader::from_slice(&raw_packet) {
         Ok((header, payload)) => {
-            return Ok(TcpPacket {
+            Ok(TcpPacket {
                 header,
                 payload: payload.to_vec(),
-            });
+            })
         }
         Err(_) => {
-            return Err(Error::new(
+            Err(Error::new(
                 ErrorKind::InvalidData,
                 "Failed to read received packet error",
-            ));
+            ))
         }
     }
 }
@@ -91,26 +91,22 @@ pub fn header_flags(head: &TcpHeader) -> u8 {
 
 /// Checks if a TCP header has only the specified flags
 pub fn has_only_flags(head: &TcpHeader, flags: u8) -> bool {
-    let head_flags = header_flags(&head);
+    let head_flags = header_flags(head);
     // The better/only way of checking equality
     (head_flags ^ flags) == 0
 }
 
 /// Checks if a TCP header has the specified flags, ignoring other flags
 pub fn has_flags(head: &TcpHeader, flags: u8) -> bool {
-    let head_flags = header_flags(&head);
+    let head_flags = header_flags(head);
     (head_flags & flags) == flags
 }
 
 /// Horrible terrible function to determine if a packet is SYN and ONLY SYN
 pub fn is_syn(head: &TcpHeader) -> bool {
     if head.ns | head.fin | head.rst | head.psh | head.ack | head.urg | head.ece | head.cwr {
-        return false;
-    } else if head.syn {
-        true
-    } else {
         false
-    }
+    } else { head.syn }
 }
 
 /*
